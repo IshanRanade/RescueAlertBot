@@ -21,14 +21,17 @@ OTP = os.environ.get("OTP")
 
 
 def send_notification(msg):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
         print("Telegram disabled (missing token/chat id)")
         return
 
     try:
         r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": msg},
             timeout=10,
         )
         print("📱 Telegram sent:", r.text)

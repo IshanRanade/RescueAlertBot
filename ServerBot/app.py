@@ -115,9 +115,15 @@ def start():
     global TIMER_THREAD
 
     env = os.environ.copy()
+
+    # Credentials from UI
     env["EMAIL"] = request.form["email"]
     env["PASSWORD"] = request.form["password"]
     env["OTP"] = request.form["otp"]
+
+    # Explicitly pass Telegram env (from Docker)
+    env["TELEGRAM_BOT_TOKEN"] = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    env["TELEGRAM_CHAT_ID"] = os.environ.get("TELEGRAM_CHAT_ID", "")
 
     # Start bot thread safely
     Thread(target=start_bot_process, args=(env,), daemon=True).start()
