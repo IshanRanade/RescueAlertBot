@@ -9,8 +9,12 @@ LOGIN_URL = "https://login.mysevaro.com"
 HOME_URL = "https://login.mysevaro.com/app/UserHome"
 
 # Telegram
-TELEGRAM_BOT_TOKEN = "8160686991:AAGo5m6aj8BZ7kmfo4phgOojLGlyNkgkePg"
-TELEGRAM_CHAT_ID = "8492458042"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+EMAIL = os.environ.get("EMAIL")
+PASSWORD = os.environ.get("PASSWORD")
+OTP = os.environ.get("OTP")
 
 
 def send_notification(msg):
@@ -30,24 +34,19 @@ def send_notification(msg):
 def login(page):
     print("🔐 Login required")
 
-    email = input("Email: ")
-    password = input("Password: ")
-    otp = input("Google Authenticator Code: ")
-
     page.goto(LOGIN_URL)
-
-    page.fill('input[name="identifier"]', email)
+    page.fill('input[name="identifier"]', EMAIL)
     page.click('input.button.button-primary[type="submit"]')
 
     page.wait_for_selector('input[type="password"]', timeout=20000)
-    page.fill('input[type="password"]', password)
+    page.fill('input[type="password"]', PASSWORD)
     page.click('input.button.button-primary[type="submit"]')
 
     totp_selector = 'input[name="otp"], input[name="credentials.passcode"], input[id*="totp"]'
     page.wait_for_selector(totp_selector, timeout=20000)
 
     page.click(totp_selector)
-    page.type(totp_selector, otp, delay=50)
+    page.type(totp_selector, OTP, delay=50)
     page.click('input.button.button-primary[type="submit"]')
 
     page.wait_for_selector("text=Synapse", timeout=60000)
@@ -94,7 +93,6 @@ def bot_loop(new_page):
 
     while True:
         try:
-            # Refresh dashboard count
             badge = new_page.locator(
                 'li.rescue-dashboard-container .rescue-dashboard-count'
             )
@@ -107,13 +105,11 @@ def bot_loop(new_page):
 
                     new_page.reload()
                     new_page.wait_for_load_state("load", timeout=30000)
-
                     new_page.wait_for_selector(rescue_selector, timeout=15000)
                     new_page.locator(rescue_selector).click()
 
                     time.sleep(3)
 
-                    # Look for Accept continuously
                     for _ in range(10):
                         accept_btn = new_page.locator('button:has-text("Accept")')
 
@@ -127,10 +123,8 @@ def bot_loop(new_page):
                                 pass
 
                         time.sleep(1)
-
             else:
                 print("💤 No cases")
-
         except Exception as e:
             print("⚠️ Bot error:", e)
 
@@ -148,11 +142,7 @@ with sync_playwright() as p:
         context = browser.new_context()
 
     page = context.new_page()
-
     ensure_logged_in(context, page)
-
     new_page = start_synapse(context, page)
-
     context.storage_state(path=STATE_FILE)
-
     bot_loop(new_page)

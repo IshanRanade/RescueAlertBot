@@ -2,29 +2,64 @@
 <html>
 <head>
     <title>Sevaro Bot</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .status { font-weight: bold; }
+        .timer { font-size: 1.5em; margin-top: 10px; }
+        button { margin: 5px; padding: 10px 20px; }
+        .form-section { margin-bottom: 20px; }
+    </style>
 </head>
 <body>
 
 <h2>Sevaro Rescue Bot</h2>
 
-<form action="/start" method="post">
-    <label>Email:</label><br>
-    <input type="text" name="email"><br><br>
+<div class="form-section">
+    <form id="startForm" action="/start" method="post">
+        <label>Email:</label><br>
+        <input type="text" name="email" required><br><br>
 
-    <label>Password:</label><br>
-    <input type="password" name="password"><br><br>
+        <label>Password:</label><br>
+        <input type="password" name="password" required><br><br>
 
-    <label>Google Authenticator Code:</label><br>
-    <input type="text" name="otp"><br><br>
+        <label>Google Authenticator Code:</label><br>
+        <input type="text" name="otp" required><br><br>
 
-    <button type="submit">Start Bot</button>
-</form>
+        <button type="submit">Start Bot</button>
+    </form>
+</div>
 
-<br>
+<div class="form-section">
+    <form id="stopForm" action="/stop" method="post">
+        <button type="submit">Stop Bot</button>
+    </form>
+    <form id="refreshForm" action="/refresh_timer" method="post">
+        <button type="submit">Refresh Timer</button>
+    </form>
+</div>
 
-<form action="/stop" method="post">
-    <button type="submit">Stop Bot</button>
-</form>
+<p>Bot status: <span id="status">{{ status }}</span></p>
+<p class="timer">Time left: <span id="timer">{{ hours }}:{{ minutes }}:{{ seconds }}</span></p>
+
+<script>
+function updateStatus() {
+    fetch("/status")
+        .then(res => res.json())
+        .then(data => {
+            document.getElementById("status").textContent = data.status;
+            document.getElementById("timer").textContent =
+                data.hours.toString().padStart(2,'0') + ":" +
+                data.minutes.toString().padStart(2,'0') + ":" +
+                data.seconds.toString().padStart(2,'0');
+        });
+}
+
+// Poll status every second
+setInterval(updateStatus, 1000);
+
+// Update immediately on load
+updateStatus();
+</script>
 
 </body>
 </html>
