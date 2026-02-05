@@ -1,124 +1,148 @@
 from flask import Flask, render_template, request, redirect, jsonify
 import subprocess
 import os
+import sys
 import time
 from threading import Thread, Event, Lock
 
 app = Flask(__name__)
 
+# ---------------- STATUS STRINGS ---------------- #
+STATUS_RUNNING = "RUNNING"
+STATUS_STOPPED = "STOPPED"
+
 BOT_PROCESS = None
-BOT_THREAD = None
+BOT_LOCK = Lock()  # Lock to prevent multiple starts
 TIMER_THREAD = None
 TIMER_STOP_EVENT = Event()
 TIME_LEFT = 0
 TIME_LOCK = Lock()
-TIMER_DURATION = 3 * 60 * 60  # 3 hours in seconds
+TIMER_DURATION = 3 * 60 * 60  # 3 hours
 
 
-def run_bot_with_logging(env):
+# ---------------- BOT ---------------- #
+
+def start_bot_process(env):
     global BOT_PROCESS
-    BOT_PROCESS = subprocess.Popen(
-        ["python", "sevaro_bot.py"],
-        env=env,
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-        bufsize=1,
-        universal_newlines=True
-    )
+    with BOT_LOCK:
+        if BOT_PROCESS and BOT_PROCESS.poll() is None:
+            print("Bot already running (inside start_bot_process).", flush=True)
+            return
+
+        BOT_PROCESS = subprocess.Popen(
+            ["python", "-u", "sevaro_bot.py"],  # -u = unbuffered logs
+            env=env,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
+
     BOT_PROCESS.wait()
-    BOT_PROCESS = None
-    print("Bot has stopped.", flush=True)
+    with BOT_LOCK:
+        BOT_PROCESS = None
+    print("Bot stopped.", flush=True)
 
 
-def timer_thread():
-    global TIME_LEFT, BOT_PROCESS
+# ---------------- TIMER ---------------- #
+
+def timer_loop():
+    global TIME_LEFT
+
     with TIME_LOCK:
         TIME_LEFT = TIMER_DURATION
 
     while True:
         time.sleep(1)
 
+        if TIMER_STOP_EVENT.is_set():
+            break
+
+        with BOT_LOCK:
+            proc = BOT_PROCESS
+
+        if proc is None or proc.poll() is not None:
+            break
+
         with TIME_LOCK:
-            if TIMER_STOP_EVENT.is_set() or TIME_LEFT <= 0:
-                TIME_LEFT = 0
+            if TIME_LEFT <= 0:
                 break
             TIME_LEFT -= 1
 
-        # If bot crashed, stop timer
-        if BOT_PROCESS is None or (BOT_PROCESS and BOT_PROCESS.poll() is not None):
-            with TIME_LOCK:
-                TIME_LEFT = 0
-            break
-
-    # Auto-stop the bot if time runs out
-    if BOT_PROCESS and BOT_PROCESS.poll() is None:
-        print("Auto-stopping bot after 3 hours.")
-        BOT_PROCESS.terminate()
-        BOT_PROCESS.wait()
+    # Auto stop when time ends
+    with BOT_LOCK:
+        if BOT_PROCESS and BOT_PROCESS.poll() is None:
+            print(f"Auto-stopping bot after {TIMER_DURATION} seconds.", flush=True)
+            BOT_PROCESS.terminate()
+            BOT_PROCESS.wait(timeout=10)
 
     with TIME_LOCK:
         TIME_LEFT = 0
 
 
+# ---------------- ROUTES ---------------- #
+
 @app.route("/")
 def index():
+    print("On main page...", flush=True)
+
     with TIME_LOCK:
         t = TIME_LEFT
-    hours, remainder = divmod(t, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    status = "running" if BOT_PROCESS and BOT_PROCESS.poll() is None else "stopped"
-    return render_template("index.html", status=status,
-                           hours=hours, minutes=minutes, seconds=seconds)
+    h, r = divmod(t, 3600)
+    m, s = divmod(r, 60)
+
+    with BOT_LOCK:
+        status = STATUS_RUNNING if BOT_PROCESS and BOT_PROCESS.poll() is None else STATUS_STOPPED
+
+    return render_template("index.html", status=status, hours=h, minutes=m, seconds=s)
 
 
 @app.route("/start", methods=["POST"])
 def start():
-    global BOT_THREAD, TIMER_THREAD, TIMER_STOP_EVENT
+    print("Starting bot...", flush=True)
 
-    if BOT_PROCESS and BOT_PROCESS.poll() is None:
-        return "Bot already running"
-
-    email = request.form["email"]
-    password = request.form["password"]
-    otp = request.form["otp"]
+    global TIMER_THREAD
 
     env = os.environ.copy()
-    env["EMAIL"] = email
-    env["PASSWORD"] = password
-    env["OTP"] = otp
+    env["EMAIL"] = request.form["email"]
+    env["PASSWORD"] = request.form["password"]
+    env["OTP"] = request.form["otp"]
 
     TIMER_STOP_EVENT.clear()
 
-    # Start bot thread
-    BOT_THREAD = Thread(target=run_bot_with_logging, args=(env,), daemon=True)
-    BOT_THREAD.start()
+    # Start bot thread safely
+    Thread(target=start_bot_process, args=(env,), daemon=True).start()
 
-    # Start timer thread
-    TIMER_THREAD = Thread(target=timer_thread, daemon=True)
-    TIMER_THREAD.start()
+    # Start timer if not already running
+    if TIMER_THREAD is None or not TIMER_THREAD.is_alive():
+        TIMER_THREAD = Thread(target=timer_loop, daemon=True)
+        TIMER_THREAD.start()
 
     return redirect("/")
 
 
 @app.route("/stop", methods=["POST"])
 def stop():
-    global TIMER_STOP_EVENT
     TIMER_STOP_EVENT.set()
 
-    if BOT_PROCESS and BOT_PROCESS.poll() is None:
-        BOT_PROCESS.terminate()
-        BOT_PROCESS.wait()
+    with BOT_LOCK:
+        if BOT_PROCESS and BOT_PROCESS.poll() is None:
+            BOT_PROCESS.terminate()
+            BOT_PROCESS.wait(timeout=10)
 
     return redirect("/")
 
 
 @app.route("/refresh_timer", methods=["POST"])
 def refresh_timer():
-    global TIME_LEFT, TIMER_STOP_EVENT
-    if BOT_PROCESS and BOT_PROCESS.poll() is None:
+    with BOT_LOCK:
+        bot_running = BOT_PROCESS is not None and BOT_PROCESS.poll() is None
+
+    if bot_running:
         with TIME_LOCK:
+            global TIME_LEFT
             TIME_LEFT = TIMER_DURATION
         TIMER_STOP_EVENT.clear()
+
+    # Always redirect back to index, even if bot is not running
     return redirect("/")
 
 
@@ -126,15 +150,13 @@ def refresh_timer():
 def status():
     with TIME_LOCK:
         t = TIME_LEFT
-    hours, remainder = divmod(t, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    status = "running" if BOT_PROCESS and BOT_PROCESS.poll() is None else "stopped"
-    return jsonify({
-        "status": status,
-        "hours": hours,
-        "minutes": minutes,
-        "seconds": seconds
-    })
+    h, r = divmod(t, 3600)
+    m, s = divmod(r, 60)
+
+    with BOT_LOCK:
+        status = STATUS_RUNNING if BOT_PROCESS and BOT_PROCESS.poll() is None else STATUS_STOPPED
+
+    return jsonify(status=status, hours=h, minutes=m, seconds=s)
 
 
 if __name__ == "__main__":

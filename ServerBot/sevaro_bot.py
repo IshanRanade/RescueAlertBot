@@ -2,6 +2,9 @@ from playwright.sync_api import sync_playwright
 import requests
 import time
 import os
+import sys
+
+sys.stdout.reconfigure(line_buffering=True)
 
 STATE_FILE = "okta_state.json"
 
@@ -19,14 +22,16 @@ OTP = os.environ.get("OTP")
 
 def send_notification(msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram disabled (missing token/chat id)")
         return
+
     try:
-        requests.post(
+        r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             data={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
             timeout=10,
         )
-        print("📱 Telegram sent")
+        print("📱 Telegram sent:", r.text)
     except Exception as e:
         print("Telegram error:", e)
 
@@ -58,9 +63,8 @@ def ensure_logged_in(context, page):
     time.sleep(3)
 
     if page.locator("text=Synapse").count() == 0:
-        login(page)
-        context.storage_state(path=STATE_FILE)
-        print("💾 Session saved")
+        print("⚠️ Session expired or invalid. Exiting bot.")
+        sys.exit(1)
     else:
         print("🔐 Session valid")
 
@@ -88,19 +92,23 @@ def start_synapse(context, page):
 def bot_loop(new_page):
     rescue_selector = 'li.rescue-dashboard-container a.nav-link'
     check_interval = 2
+    last_case_state = None
 
     print("👀 Bot running...")
 
-    while True:
-        try:
-            badge = new_page.locator(
-                'li.rescue-dashboard-container .rescue-dashboard-count'
-            )
+    try:
+        while True:
+            # Detect if login page is shown (session expired)
+            if new_page.locator('input[name="identifier"]').count() > 0:
+                print("⚠️ Detected login page. Session expired, exiting bot.")
+                sys.exit(1)
 
+            badge = new_page.locator('li.rescue-dashboard-container .rescue-dashboard-count')
+            new_cases = False
             if badge.count() > 0:
                 text = badge.text_content()
-
                 if text and text.strip().isdigit() and int(text.strip()) > 0:
+                    new_cases = True
                     print(f"🔔 New case detected: {text}")
 
                     new_page.reload()
@@ -112,37 +120,49 @@ def bot_loop(new_page):
 
                     for _ in range(10):
                         accept_btn = new_page.locator('button:has-text("Accept")')
-
                         if accept_btn.count() > 0:
                             try:
                                 accept_btn.first.click(force=True)
                                 print("✅ Accepted case!")
                                 send_notification("🚨 Rescue case accepted!")
                                 break
-                            except:
-                                pass
-
+                            except Exception as e:
+                                print("⚠️ Accept click failed:", e)
                         time.sleep(1)
-            else:
-                print("💤 No cases")
-        except Exception as e:
-            print("⚠️ Bot error:", e)
 
-        time.sleep(check_interval)
+            # Print "No cases" only if state changed
+            if not new_cases and last_case_state != "no_cases":
+                print("💤 No cases")
+                last_case_state = "no_cases"
+            elif new_cases:
+                last_case_state = "new_cases"
+
+            time.sleep(check_interval)
+
+    except Exception as e:
+        print("⚠️ Unhandled bot error:", e)
+        sys.exit(1)  # Exit bot process on any exception
 
 
 # ================= MAIN =================
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
+    browser = None
+    try:
+        browser = p.chromium.launch(headless=True)
 
-    if os.path.exists(STATE_FILE):
-        context = browser.new_context(storage_state=STATE_FILE)
-    else:
-        context = browser.new_context()
+        if os.path.exists(STATE_FILE):
+            context = browser.new_context(storage_state=STATE_FILE)
+        else:
+            context = browser.new_context()
 
-    page = context.new_page()
-    ensure_logged_in(context, page)
-    new_page = start_synapse(context, page)
-    context.storage_state(path=STATE_FILE)
-    bot_loop(new_page)
+        page = context.new_page()
+        ensure_logged_in(context, page)
+        new_page = start_synapse(context, page)
+        context.storage_state(path=STATE_FILE)
+        bot_loop(new_page)
+
+    finally:
+        if browser:
+            print("🧹 Closing browser...")
+            browser.close()
