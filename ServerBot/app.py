@@ -29,6 +29,12 @@ def start_bot_process(env):
             print("Bot already running (inside start_bot_process).", flush=True)
             return
 
+        # Reset timer automatically when bot starts
+        with TIME_LOCK:
+            global TIME_LEFT
+            TIME_LEFT = TIMER_DURATION
+        TIMER_STOP_EVENT.clear()
+
         BOT_PROCESS = subprocess.Popen(
             ["python", "-u", "sevaro_bot.py"],  # -u = unbuffered logs
             env=env,
@@ -41,14 +47,20 @@ def start_bot_process(env):
         BOT_PROCESS = None
     print("Bot stopped.", flush=True)
 
+    # Set timer to 0 immediately when bot dies/crashes
+    with TIME_LOCK:
+        TIME_LEFT = 0
+
 
 # ---------------- TIMER ---------------- #
 
 def timer_loop():
     global TIME_LEFT
 
+    # Initialize timer if not already set
     with TIME_LOCK:
-        TIME_LEFT = TIMER_DURATION
+        if TIME_LEFT <= 0:
+            TIME_LEFT = TIMER_DURATION
 
     while True:
         time.sleep(1)
@@ -59,7 +71,10 @@ def timer_loop():
         with BOT_LOCK:
             proc = BOT_PROCESS
 
+        # Stop timer if bot is not running
         if proc is None or proc.poll() is not None:
+            with TIME_LOCK:
+                TIME_LEFT = 0
             break
 
         with TIME_LOCK:
@@ -82,8 +97,6 @@ def timer_loop():
 
 @app.route("/")
 def index():
-    print("On main page...", flush=True)
-
     with TIME_LOCK:
         t = TIME_LEFT
     h, r = divmod(t, 3600)
@@ -106,12 +119,10 @@ def start():
     env["PASSWORD"] = request.form["password"]
     env["OTP"] = request.form["otp"]
 
-    TIMER_STOP_EVENT.clear()
-
     # Start bot thread safely
     Thread(target=start_bot_process, args=(env,), daemon=True).start()
 
-    # Start timer if not already running
+    # Start timer thread if not already running
     if TIMER_THREAD is None or not TIMER_THREAD.is_alive():
         TIMER_THREAD = Thread(target=timer_loop, daemon=True)
         TIMER_THREAD.start()
@@ -128,6 +139,11 @@ def stop():
             BOT_PROCESS.terminate()
             BOT_PROCESS.wait(timeout=10)
 
+    # Set timer to 0 when bot is stopped
+    with TIME_LOCK:
+        global TIME_LEFT
+        TIME_LEFT = 0
+
     return redirect("/")
 
 
@@ -142,7 +158,6 @@ def refresh_timer():
             TIME_LEFT = TIMER_DURATION
         TIMER_STOP_EVENT.clear()
 
-    # Always redirect back to index, even if bot is not running
     return redirect("/")
 
 
