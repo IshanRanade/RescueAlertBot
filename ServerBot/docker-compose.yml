@@ -3,7 +3,7 @@ version: "3.9"
 services:
   sevaro-bot:
     build: .
-    container_name: sevaro_bot
+    container_name: sevaro-bot
     ports:
       - "3267:3267"
     volumes:
