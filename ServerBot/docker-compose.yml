@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  sevaro-bot:
+    build: .
+    container_name: sevaro_bot
+    ports:
+      - "3267:3267"
+    volumes:
+      - ./okta_state.json:/app/okta_state.json
+    environment:
+      - TELEGRAM_BOT_TOKEN=YOUR_TOKEN
+      - TELEGRAM_CHAT_ID=YOUR_CHAT_ID
+    restart: unless-stopped
