@@ -17,22 +17,17 @@ TIMER_DURATION = 3 * 60 * 60  # 3 hours in seconds
 
 def run_bot_with_logging(env):
     global BOT_PROCESS
-    # Start the bot process and redirect output to stdout (docker logs)
     BOT_PROCESS = subprocess.Popen(
         ["python", "sevaro_bot.py"],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        bufsize=1,
         universal_newlines=True
     )
-
-    # Print stdout to docker logs
-    for line in BOT_PROCESS.stdout:
-        print(line, end="")
-
     BOT_PROCESS.wait()
     BOT_PROCESS = None
-    print("Bot has stopped.")
+    print("Bot has stopped.", flush=True)
 
 
 def timer_thread():

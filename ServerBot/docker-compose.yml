@@ -9,6 +9,6 @@ services:
     volumes:
       - ./okta_state.json:/app/okta_state.json
     environment:
-      - TELEGRAM_BOT_TOKEN="8160686991:AAGo5m6aj8BZ7kmfo4phgOojLGlyNkgkePg"
-      - TELEGRAM_CHAT_ID="8492458042"
+      - TELEGRAM_BOT_TOKEN=8160686991:AAGo5m6aj8BZ7kmfo4phgOojLGlyNkgkePg
+      - TELEGRAM_CHAT_ID=8492458042
     restart: unless-stopped
