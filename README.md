@@ -14,7 +14,7 @@ Then go to `http://localhost:3267/`
 
 `sudo docker pull kingish123/sevaro-runner:latest`
 
-`docker compose rm -sf sevaro-bot`
+`sudo docker compose rm -sf sevaro-bot`
 
-`docker compose up --build -d sevaro-bot`
+`sudo docker compose up --build -d sevaro-bot`
 
