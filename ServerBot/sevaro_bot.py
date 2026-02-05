@@ -63,8 +63,8 @@ def ensure_logged_in(context, page):
     time.sleep(3)
 
     if page.locator("text=Synapse").count() == 0:
-        print("⚠️ Session expired or invalid. Exiting bot.")
-        sys.exit(1)
+        print("⚠️ Session expired or invalid. Logging in again...")
+        login(page)
     else:
         print("🔐 Session valid")
 
