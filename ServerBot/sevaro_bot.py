@@ -154,7 +154,7 @@ with sync_playwright() as p:
     try:
         browser = p.chromium.launch(headless=True)
 
-        if os.path.exists(STATE_FILE):
+        if os.path.exists(STATE_FILE) and os.path.getsize(STATE_FILE) > 0:
             context = browser.new_context(storage_state=STATE_FILE)
         else:
             context = browser.new_context()
