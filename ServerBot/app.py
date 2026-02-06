@@ -17,7 +17,7 @@ TIMER_THREAD = None
 TIMER_STOP_EVENT = Event()
 TIME_LEFT = 0
 TIME_LOCK = Lock()
-TIMER_DURATION = 3 * 60 * 60  # 3 hours
+TIMER_DURATION = 1 * 60 * 60  # 1 hour
 
 
 # ---------------- BOT ---------------- #

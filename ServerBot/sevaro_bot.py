@@ -92,6 +92,35 @@ def start_synapse(context, page):
     return new_page
 
 
+def extract_case_info(new_page):
+    """Extract hospital name, patient name, and patient ID from the rescue case row."""
+    try:
+        # Find the case row that contains the Accept button
+        case_row = new_page.locator('div.complete-row:has(button:has-text("Accept"))').first
+        
+        if case_row.count() == 0:
+            print("⚠️ No case row with Accept button found")
+            return None, None, None
+        
+        # Extract hospital name from facility-name div
+        hospital_el = case_row.locator('div.facility-name div').first
+        hospital_name = hospital_el.text_content().strip() if hospital_el.count() > 0 else None
+        
+        # Extract patient name from rescue-dashboard-patient-name
+        patient_name_el = case_row.locator('div[data-dd-action-name="rescue-dashboard-patient-name"] span[data-dd-privacy="mask"] span[apptruncatepopover]').first
+        patient_name = patient_name_el.text_content().strip() if patient_name_el.count() > 0 else None
+        
+        # Extract patient ID (MRN) from rescue-dashboard-mrn
+        patient_id_el = case_row.locator('span[data-dd-action-name="rescue-dashboard-mrn"]').first
+        patient_id = patient_id_el.text_content().strip() if patient_id_el.count() > 0 else None
+        
+        return hospital_name, patient_name, patient_id
+        
+    except Exception as e:
+        print(f"⚠️ Error extracting case info: {e}")
+        return None, None, None
+
+
 def bot_loop(new_page):
     rescue_selector = 'li.rescue-dashboard-container a.nav-link'
     check_interval = 2
@@ -124,10 +153,30 @@ def bot_loop(new_page):
                     for _ in range(10):
                         accept_btn = new_page.locator('button:has-text("Accept")')
                         if accept_btn.count() > 0:
+                            # Extract case info before accepting
+                            time.sleep(1)  # Small delay before extraction
+                            hospital_name, patient_name, patient_id = extract_case_info(new_page)
+                            
+                            # Only accept if all 3 pieces of information are found
+                            if not hospital_name or not patient_name or not patient_id:
+                                print(f"⚠️ Missing case info - Hospital: {hospital_name}, Patient: {patient_name}, ID: {patient_id}")
+                                print("⏭️ Ignoring notification (incomplete info)")
+                                break
+                            
                             try:
                                 accept_btn.first.click(force=True)
                                 print("✅ Accepted case!")
-                                send_notification("🚨 Rescue case accepted!")
+                                print(f"   Hospital: {hospital_name}")
+                                print(f"   Patient: {patient_name}")
+                                print(f"   Patient ID: {patient_id}")
+                                
+                                notification_msg = (
+                                    f"🚨 Rescue case accepted!\n\n"
+                                    f"🏥 Hospital: {hospital_name}\n"
+                                    f"👤 Patient: {patient_name}\n"
+                                    f"🆔 Patient ID: {patient_id}"
+                                )
+                                send_notification(notification_msg)
                                 break
                             except Exception as e:
                                 print("⚠️ Accept click failed:", e)
