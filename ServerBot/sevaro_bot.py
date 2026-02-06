@@ -1,10 +1,25 @@
 from playwright.sync_api import sync_playwright
 import requests
+import signal
 import time
 import os
 import sys
 
 sys.stdout.reconfigure(line_buffering=True)
+
+# Global flag for graceful shutdown
+SHUTDOWN_REQUESTED = False
+
+
+def handle_shutdown(signum, frame):
+    """Handle SIGTERM/SIGINT for graceful shutdown."""
+    global SHUTDOWN_REQUESTED
+    print(f"🛑 Received signal {signum}, shutting down gracefully...", flush=True)
+    SHUTDOWN_REQUESTED = True
+
+
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
 
 STATE_FILE = "okta_state.json"
 LOGIN_URL = "https://login.mysevaro.com"
@@ -149,15 +164,23 @@ def get_case_count(page):
     return int(text) if text.isdigit() else 0
 
 
+def interruptible_sleep(seconds):
+    """Sleep that can be interrupted by shutdown signal."""
+    for _ in range(int(seconds * 10)):
+        if SHUTDOWN_REQUESTED:
+            return
+        time.sleep(0.1)
+
+
 def bot_loop(page):
     last_state = None
     print("👀 Bot running...")
 
     try:
-        while True:
+        while not SHUTDOWN_REQUESTED:
             if page.locator('input[name="identifier"]').count() > 0:
                 print("⚠️ Detected login page. Session expired, exiting bot.")
-                sys.exit(1)
+                return
 
             case_count = get_case_count(page)
 
@@ -169,10 +192,9 @@ def bot_loop(page):
                 print("💤 No cases")
                 last_state = "no_cases"
 
-            time.sleep(2)
+            interruptible_sleep(2)
     except Exception as e:
         print("⚠️ Unhandled bot error:", e)
-        sys.exit(1)
 
 
 # ================= MAIN =================
