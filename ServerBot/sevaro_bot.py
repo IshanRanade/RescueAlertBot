@@ -34,9 +34,10 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
 def send_notification(msg):
+    """Send Telegram notification. Returns True on success, False on failure."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram disabled (missing token/chat id)")
-        return
+        return False
 
     print(f"📤 Sending Telegram: {msg}", flush=True)
     start = time.time()
@@ -47,10 +48,16 @@ def send_notification(msg):
             timeout=10,
         )
         elapsed = time.time() - start
-        print(f"📱 Telegram sent in {elapsed:.1f}s", flush=True)
+        if r.ok:
+            print(f"📱 Telegram sent in {elapsed:.1f}s", flush=True)
+            return True
+        else:
+            print(f"Telegram failed in {elapsed:.1f}s ({r.status_code}): {r.text}", flush=True)
+            return False
     except Exception as e:
         elapsed = time.time() - start
         print(f"Telegram error after {elapsed:.1f}s: {e}", flush=True)
+        return False
 
 
 def login(page):
@@ -150,9 +157,11 @@ def handle_new_case(page):
             try:
                 accept_btn.first.click(force=True)
                 print(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
-                send_notification(
+                if not send_notification(
                     f"🚨 Rescue case accepted!\n\n🏥 Hospital: {hospital}\n👤 Patient: {patient}\n🆔 Patient ID: {patient_id}"
-                )
+                ):
+                    print("❌ Telegram failed. Exiting bot.", flush=True)
+                    sys.exit(1)
                 return
             except Exception as e:
                 print("⚠️ Accept click failed:", e)

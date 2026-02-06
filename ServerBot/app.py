@@ -101,6 +101,21 @@ def kill_bot_process():
             pass
 
 
+def send_telegram_or_die(msg):
+    """Send Telegram notification. Kill bot if it fails."""
+    global BOT_PROCESS, TIME_LEFT
+    if not send_telegram(msg):
+        print(f"❌ Telegram failed. Killing bot.", flush=True)
+        with BOT_LOCK:
+            kill_bot_process()
+            BOT_PROCESS = None
+        with TIME_LOCK:
+            TIME_LEFT = 0
+        TIMER_STOP_EVENT.set()
+        return False
+    return True
+
+
 # ---------------- BOT ---------------- #
 
 def start_bot_process(env):
@@ -119,13 +134,7 @@ def start_bot_process(env):
             start_new_session=True,  # Create process group for clean kills
         )
 
-    if not send_telegram("🟢 Bot started and watching for rescue cases."):
-        print("❌ Failed to send start notification. Killing bot.", flush=True)
-        with BOT_LOCK:
-            kill_bot_process()
-            BOT_PROCESS = None
-        with TIME_LOCK:
-            TIME_LEFT = 0
+    if not send_telegram_or_die("🟢 Bot started and watching for rescue cases."):
         return
 
     BOT_PROCESS.wait()
@@ -171,12 +180,13 @@ def timer_loop():
         # Send 5-minute warning
         if current_time == WARNING_TIME and not WARNING_SENT:
             WARNING_SENT = True
-            send_telegram("⚠️ Bot timer expires in 5 minutes! Refresh to extend.")
+            if not send_telegram_or_die("⚠️ Bot timer expires in 5 minutes! Refresh to extend."):
+                break
 
     with BOT_LOCK:
         if is_bot_running():
             print(f"Auto-stopping bot after {TIMER_DURATION} seconds.", flush=True)
-            send_telegram("⏰ Bot timer expired. Stopping bot.")
+            send_telegram("⏰ Bot timer expired. Stopping bot.")  # Don't kill on failure, already stopping
             kill_bot_process()
 
     with TIME_LOCK:
@@ -233,7 +243,7 @@ def refresh_timer():
     with BOT_LOCK:
         if is_bot_running():
             reset_timer()
-            send_telegram("🔄 Timer refreshed to 1 hour.")
+            send_telegram_or_die("🔄 Timer refreshed to 1 hour.")
     return redirect("/")
 
 
