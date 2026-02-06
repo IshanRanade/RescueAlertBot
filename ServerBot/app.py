@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, jsonify
 import subprocess
 import signal
+import requests
 import os
 import sys
 import time
@@ -16,6 +17,28 @@ TIMER_STOP_EVENT = Event()
 TIME_LEFT = 0
 TIME_LOCK = Lock()
 TIMER_DURATION = 60 * 60  # 1 hour
+WARNING_TIME = 5 * 60  # 5 minutes before expiry
+WARNING_SENT = False
+
+
+def send_telegram(msg):
+    """Send a Telegram notification."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+    if not token or not chat_id:
+        print(f"Telegram disabled: {msg}", flush=True)
+        return
+
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": msg},
+            timeout=10,
+        )
+        print(f"📱 Telegram sent: {msg}", flush=True)
+    except Exception as e:
+        print(f"Telegram error: {e}", flush=True)
 
 
 # ---------------- HELPERS ---------------- #
@@ -40,9 +63,10 @@ def get_status_data():
 
 def reset_timer():
     """Reset timer to full duration."""
-    global TIME_LEFT
+    global TIME_LEFT, WARNING_SENT
     with TIME_LOCK:
         TIME_LEFT = TIMER_DURATION
+    WARNING_SENT = False
     TIMER_STOP_EVENT.clear()
 
 
@@ -70,12 +94,13 @@ def kill_bot_process():
 # ---------------- BOT ---------------- #
 
 def start_bot_process(env):
-    global BOT_PROCESS, TIME_LEFT
+    global BOT_PROCESS, TIME_LEFT, WARNING_SENT
     with BOT_LOCK:
         if is_bot_running():
             print("Bot already running.", flush=True)
             return
         reset_timer()
+        WARNING_SENT = False
         BOT_PROCESS = subprocess.Popen(
             ["python", "-u", "sevaro_bot.py"],
             env=env,
@@ -84,10 +109,14 @@ def start_bot_process(env):
             start_new_session=True,  # Create process group for clean kills
         )
 
+    send_telegram("🟢 Bot started and watching for rescue cases.")
+
     BOT_PROCESS.wait()
     with BOT_LOCK:
         BOT_PROCESS = None
     print("Bot stopped.", flush=True)
+
+    send_telegram("🔴 Bot has stopped.")
 
     with TIME_LOCK:
         TIME_LEFT = 0
@@ -96,7 +125,7 @@ def start_bot_process(env):
 # ---------------- TIMER ---------------- #
 
 def timer_loop():
-    global TIME_LEFT
+    global TIME_LEFT, WARNING_SENT
 
     with TIME_LOCK:
         if TIME_LEFT <= 0:
@@ -120,10 +149,17 @@ def timer_loop():
             if TIME_LEFT <= 0:
                 break
             TIME_LEFT -= 1
+            current_time = TIME_LEFT
+
+        # Send 5-minute warning
+        if current_time == WARNING_TIME and not WARNING_SENT:
+            WARNING_SENT = True
+            send_telegram("⚠️ Bot timer expires in 5 minutes! Refresh to extend.")
 
     with BOT_LOCK:
         if is_bot_running():
             print(f"Auto-stopping bot after {TIMER_DURATION} seconds.", flush=True)
+            send_telegram("⏰ Bot timer expired. Stopping bot.")
             kill_bot_process()
 
     with TIME_LOCK:
