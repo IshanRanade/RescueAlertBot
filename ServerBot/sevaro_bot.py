@@ -56,7 +56,7 @@ def login(page):
     print("✅ Login successful")
 
 
-def ensure_logged_in(context, page):
+def ensure_logged_in(page):
     page.goto(HOME_URL)
     time.sleep(3)
 
@@ -140,6 +140,15 @@ def handle_new_case(page):
         time.sleep(1)
 
 
+def get_case_count(page):
+    """Get number of pending cases from badge, or 0 if none."""
+    badge = page.locator("li.rescue-dashboard-container .rescue-dashboard-count")
+    if badge.count() == 0:
+        return 0
+    text = (badge.text_content() or "").strip()
+    return int(text) if text.isdigit() else 0
+
+
 def bot_loop(page):
     last_state = None
     print("👀 Bot running...")
@@ -150,11 +159,10 @@ def bot_loop(page):
                 print("⚠️ Detected login page. Session expired, exiting bot.")
                 sys.exit(1)
 
-            badge = page.locator("li.rescue-dashboard-container .rescue-dashboard-count")
-            has_cases = badge.count() > 0 and (badge.text_content() or "").strip().isdigit() and int(badge.text_content().strip()) > 0
+            case_count = get_case_count(page)
 
-            if has_cases:
-                print(f"🔔 New case detected: {badge.text_content()}")
+            if case_count > 0:
+                print(f"🔔 New case detected: {case_count}")
                 handle_new_case(page)
                 last_state = "new_cases"
             elif last_state != "no_cases":
@@ -180,7 +188,7 @@ with sync_playwright() as p:
             context = browser.new_context()
 
         page = context.new_page()
-        ensure_logged_in(context, page)
+        ensure_logged_in(page)
         new_page = start_synapse(context, page)
         context.storage_state(path=STATE_FILE)
         bot_loop(new_page)
