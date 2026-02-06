@@ -233,6 +233,7 @@ def refresh_timer():
     with BOT_LOCK:
         if is_bot_running():
             reset_timer()
+            send_telegram("🔄 Timer refreshed to 1 hour.")
     return redirect("/")
 
 
