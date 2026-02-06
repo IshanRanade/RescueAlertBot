@@ -22,23 +22,29 @@ WARNING_SENT = False
 
 
 def send_telegram(msg):
-    """Send a Telegram notification."""
+    """Send a Telegram notification. Returns True on success, False on failure."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 
     if not token or not chat_id:
         print(f"Telegram disabled: {msg}", flush=True)
-        return
+        return False
 
     try:
-        requests.post(
+        r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data={"chat_id": chat_id, "text": msg},
             timeout=10,
         )
-        print(f"📱 Telegram sent: {msg}", flush=True)
+        if r.ok:
+            print(f"📱 Telegram sent: {msg}", flush=True)
+            return True
+        else:
+            print(f"Telegram failed ({r.status_code}): {r.text}", flush=True)
+            return False
     except Exception as e:
         print(f"Telegram error: {e}", flush=True)
+        return False
 
 
 # ---------------- HELPERS ---------------- #
@@ -109,7 +115,14 @@ def start_bot_process(env):
             start_new_session=True,  # Create process group for clean kills
         )
 
-    send_telegram("🟢 Bot started and watching for rescue cases.")
+    if not send_telegram("🟢 Bot started and watching for rescue cases."):
+        print("❌ Failed to send start notification. Killing bot.", flush=True)
+        with BOT_LOCK:
+            kill_bot_process()
+            BOT_PROCESS = None
+        with TIME_LOCK:
+            TIME_LEFT = 0
+        return
 
     BOT_PROCESS.wait()
     with BOT_LOCK:
