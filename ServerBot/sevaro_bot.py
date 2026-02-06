@@ -38,15 +38,19 @@ def send_notification(msg):
         print("Telegram disabled (missing token/chat id)")
         return
 
+    print(f"📤 Sending Telegram: {msg}", flush=True)
+    start = time.time()
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             data={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
             timeout=10,
         )
-        print("📱 Telegram sent:", r.text)
+        elapsed = time.time() - start
+        print(f"📱 Telegram sent in {elapsed:.1f}s", flush=True)
     except Exception as e:
-        print("Telegram error:", e)
+        elapsed = time.time() - start
+        print(f"Telegram error after {elapsed:.1f}s: {e}", flush=True)
 
 
 def login(page):

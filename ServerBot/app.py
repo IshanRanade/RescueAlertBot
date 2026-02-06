@@ -30,20 +30,24 @@ def send_telegram(msg):
         print(f"Telegram disabled: {msg}", flush=True)
         return False
 
+    print(f"📤 Sending Telegram: {msg}", flush=True)
+    start = time.time()
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data={"chat_id": chat_id, "text": msg},
             timeout=10,
         )
+        elapsed = time.time() - start
         if r.ok:
-            print(f"📱 Telegram sent: {msg}", flush=True)
+            print(f"📱 Telegram sent in {elapsed:.1f}s: {msg}", flush=True)
             return True
         else:
-            print(f"Telegram failed ({r.status_code}): {r.text}", flush=True)
+            print(f"Telegram failed in {elapsed:.1f}s ({r.status_code}): {r.text}", flush=True)
             return False
     except Exception as e:
-        print(f"Telegram error: {e}", flush=True)
+        elapsed = time.time() - start
+        print(f"Telegram error after {elapsed:.1f}s: {e}", flush=True)
         return False
 
 
