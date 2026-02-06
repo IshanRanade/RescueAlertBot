@@ -2,12 +2,37 @@ from flask import Flask, render_template, request, redirect, jsonify
 import subprocess
 import signal
 import requests
+import atexit
 import os
 import sys
 import time
 from threading import Thread, Event, Lock
 
 app = Flask(__name__)
+
+
+def handle_container_shutdown(signum, frame):
+    """Handle container shutdown (SIGTERM from Docker)."""
+    print(f"🛑 Received signal {signum}, shutting down...", flush=True)
+    
+    # Send notification before dying
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if token and chat_id:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={"chat_id": chat_id, "text": "🔴 Bot has stopped."},
+                timeout=5,
+            )
+            print("📱 Sent shutdown notification", flush=True)
+        except Exception as e:
+            print(f"Failed to send shutdown notification: {e}", flush=True)
+    
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, handle_container_shutdown)
 
 BOT_PROCESS = None
 BOT_LOCK = Lock()
