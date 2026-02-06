@@ -12,9 +12,9 @@ Then go to `http://localhost:3267/`
 
 ## To pull, build, and run on server:
 
-`sudo docker pull kingish123/sevaro-runner:latest`
-
 `sudo docker compose rm -sf sevaro-bot`
+
+`sudo docker pull kingish123/sevaro-runner:latest`
 
 `sudo docker compose up --build -d sevaro-bot`
 
