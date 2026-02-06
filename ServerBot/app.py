@@ -2,7 +2,6 @@ from flask import Flask, render_template, request, redirect, jsonify
 import subprocess
 import signal
 import requests
-import atexit
 import os
 import sys
 import time
@@ -13,9 +12,7 @@ app = Flask(__name__)
 
 def handle_container_shutdown(signum, frame):
     """Handle container shutdown (SIGTERM from Docker)."""
-    print(f"🛑 Received signal {signum}, shutting down...", flush=True)
-    
-    # Send notification before dying
+    print("🛑 Container shutting down...", flush=True)
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if token and chat_id:
@@ -56,23 +53,19 @@ def send_telegram(msg):
         return False
 
     print(f"📤 Sending Telegram: {msg}", flush=True)
-    start = time.time()
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data={"chat_id": chat_id, "text": msg},
             timeout=10,
         )
-        elapsed = time.time() - start
         if r.ok:
-            print(f"📱 Telegram sent in {elapsed:.1f}s: {msg}", flush=True)
+            print(f"📱 Telegram sent: {msg}", flush=True)
             return True
-        else:
-            print(f"Telegram failed in {elapsed:.1f}s ({r.status_code}): {r.text}", flush=True)
-            return False
+        print(f"Telegram failed ({r.status_code}): {r.text}", flush=True)
+        return False
     except Exception as e:
-        elapsed = time.time() - start
-        print(f"Telegram error after {elapsed:.1f}s: {e}", flush=True)
+        print(f"Telegram error: {e}", flush=True)
         return False
 
 
@@ -103,6 +96,13 @@ def reset_timer():
         TIME_LEFT = TIMER_DURATION
     WARNING_SENT = False
     TIMER_STOP_EVENT.clear()
+    
+    # Also reset bot's internal failsafe timer
+    if is_bot_running():
+        try:
+            os.kill(BOT_PROCESS.pid, signal.SIGUSR1)
+        except (ProcessLookupError, OSError):
+            pass
 
 
 def kill_bot_process():
@@ -236,6 +236,7 @@ def start():
     env["OTP"] = request.form["otp"]
     env["TELEGRAM_BOT_TOKEN"] = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     env["TELEGRAM_CHAT_ID"] = os.environ.get("TELEGRAM_CHAT_ID", "")
+    env["TIMER_DURATION"] = str(TIMER_DURATION)
 
     Thread(target=start_bot_process, args=(env,), daemon=True).start()
 

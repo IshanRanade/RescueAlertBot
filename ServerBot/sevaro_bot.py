@@ -10,6 +10,19 @@ sys.stdout.reconfigure(line_buffering=True)
 # Global flag for graceful shutdown
 SHUTDOWN_REQUESTED = False
 
+# FAILSAFE: Hard max runtime (timer duration + 5 min buffer)
+TIMER_DURATION = int(os.environ.get("TIMER_DURATION", 60 * 60))  # Default 1 hour
+MAX_RUNTIME_SECONDS = TIMER_DURATION + 5 * 60  # Timer + 5 min buffer
+BOT_START_TIME = time.time()
+
+
+def check_hard_timeout():
+    """Failsafe: Kill bot if it's been running too long (backup for timer)."""
+    elapsed = time.time() - BOT_START_TIME
+    if elapsed > MAX_RUNTIME_SECONDS:
+        print(f"⛔ FAILSAFE: Bot exceeded max runtime ({MAX_RUNTIME_SECONDS}s). Forcing exit.", flush=True)
+        sys.exit(1)
+
 
 def handle_shutdown(signum, frame):
     """Handle SIGTERM/SIGINT for graceful shutdown."""
@@ -18,8 +31,16 @@ def handle_shutdown(signum, frame):
     SHUTDOWN_REQUESTED = True
 
 
+def handle_timer_reset(signum, frame):
+    """Handle SIGUSR1 to reset failsafe timer."""
+    global BOT_START_TIME
+    BOT_START_TIME = time.time()
+    print("🔄 Failsafe timer reset.", flush=True)
+
+
 signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
+signal.signal(signal.SIGUSR1, handle_timer_reset)
 
 STATE_FILE = "okta_state.json"
 LOGIN_URL = "https://login.mysevaro.com"
@@ -40,23 +61,19 @@ def send_notification(msg):
         return False
 
     print(f"📤 Sending Telegram: {msg}", flush=True)
-    start = time.time()
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             data={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
             timeout=10,
         )
-        elapsed = time.time() - start
         if r.ok:
-            print(f"📱 Telegram sent in {elapsed:.1f}s", flush=True)
+            print(f"📱 Telegram sent: {msg}", flush=True)
             return True
-        else:
-            print(f"Telegram failed in {elapsed:.1f}s ({r.status_code}): {r.text}", flush=True)
-            return False
+        print(f"Telegram failed ({r.status_code}): {r.text}", flush=True)
+        return False
     except Exception as e:
-        elapsed = time.time() - start
-        print(f"Telegram error after {elapsed:.1f}s: {e}", flush=True)
+        print(f"Telegram error: {e}", flush=True)
         return False
 
 
@@ -191,6 +208,9 @@ def bot_loop(page):
 
     try:
         while not SHUTDOWN_REQUESTED:
+            # Failsafe: check hard timeout every loop iteration
+            check_hard_timeout()
+
             if page.locator('input[name="identifier"]').count() > 0:
                 print("⚠️ Detected login page. Session expired, exiting bot.")
                 return
