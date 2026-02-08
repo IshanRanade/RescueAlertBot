@@ -5,9 +5,21 @@ import requests
 import os
 import sys
 import time
+import logging
 from threading import Thread, Event, Lock
 
 app = Flask(__name__)
+
+# Suppress /status request logs (too noisy)
+from werkzeug.serving import WSGIRequestHandler
+
+_original_log_request = WSGIRequestHandler.log_request
+
+def _filtered_log_request(self, *args, **kwargs):
+    if "GET /status" not in self.requestline and "GET / " not in self.requestline:
+        _original_log_request(self, *args, **kwargs)
+
+WSGIRequestHandler.log_request = _filtered_log_request
 
 
 def handle_container_shutdown(signum, frame):
