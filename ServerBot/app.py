@@ -6,7 +6,14 @@ import os
 import sys
 import time
 import logging
+from datetime import datetime
 from threading import Thread, Event, Lock
+
+
+def log(msg):
+    """Print with timestamp."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {msg}", flush=True)
 
 app = Flask(__name__)
 
@@ -24,7 +31,7 @@ WSGIRequestHandler.log_request = _filtered_log_request
 
 def handle_container_shutdown(signum, frame):
     """Handle container shutdown (SIGTERM from Docker)."""
-    print("🛑 Container shutting down...", flush=True)
+    log("🛑 Container shutting down...")
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if token and chat_id:
@@ -34,9 +41,9 @@ def handle_container_shutdown(signum, frame):
                 data={"chat_id": chat_id, "text": "🔴 Bot has stopped."},
                 timeout=5,
             )
-            print("📱 Sent shutdown notification", flush=True)
+            log("📱 Sent shutdown notification")
         except Exception as e:
-            print(f"Failed to send shutdown notification: {e}", flush=True)
+            log(f"Failed to send shutdown notification: {e}")
     
     sys.exit(0)
 
@@ -61,10 +68,10 @@ def send_telegram(msg):
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 
     if not token or not chat_id:
-        print(f"Telegram disabled: {msg}", flush=True)
+        log(f"Telegram disabled: {msg}")
         return False
 
-    print(f"📤 Sending Telegram: {msg}", flush=True)
+    log(f"📤 Sending Telegram: {msg}")
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
@@ -72,12 +79,12 @@ def send_telegram(msg):
             timeout=10,
         )
         if r.ok:
-            print(f"📱 Telegram sent: {msg}", flush=True)
+            log(f"📱 Telegram sent: {msg}")
             return True
-        print(f"Telegram failed ({r.status_code}): {r.text}", flush=True)
+        log(f"Telegram failed ({r.status_code}): {r.text}")
         return False
     except Exception as e:
-        print(f"Telegram error: {e}", flush=True)
+        log(f"Telegram error: {e}")
         return False
 
 
@@ -142,7 +149,7 @@ def send_telegram_or_die(msg):
     """Send Telegram notification. Kill bot if it fails."""
     global BOT_PROCESS, TIME_LEFT
     if not send_telegram(msg):
-        print(f"❌ Telegram failed. Killing bot.", flush=True)
+        log("❌ Telegram failed. Killing bot.")
         with BOT_LOCK:
             kill_bot_process()
             BOT_PROCESS = None
@@ -159,7 +166,7 @@ def start_bot_process(env):
     global BOT_PROCESS, TIME_LEFT, WARNING_SENT
     with BOT_LOCK:
         if is_bot_running():
-            print("Bot already running.", flush=True)
+            log("Bot already running.")
             return
         reset_timer()
         WARNING_SENT = False
@@ -177,7 +184,7 @@ def start_bot_process(env):
     BOT_PROCESS.wait()
     with BOT_LOCK:
         BOT_PROCESS = None
-    print("Bot stopped.", flush=True)
+    log("Bot stopped.")
 
     send_telegram("🔴 Bot has stopped.")
 
@@ -222,7 +229,7 @@ def timer_loop():
 
     with BOT_LOCK:
         if is_bot_running():
-            print(f"Auto-stopping bot after {TIMER_DURATION} seconds.", flush=True)
+            log(f"Auto-stopping bot after {TIMER_DURATION} seconds.")
             send_telegram("⏰ Bot timer expired. Stopping bot.")  # Don't kill on failure, already stopping
             kill_bot_process()
 
@@ -240,7 +247,7 @@ def index():
 
 @app.route("/start", methods=["POST"])
 def start():
-    print("Starting bot...", flush=True)
+    log("Starting bot...")
 
     env = os.environ.copy()
     env["EMAIL"] = request.form["email"]

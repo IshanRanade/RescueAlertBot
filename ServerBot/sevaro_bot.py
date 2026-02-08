@@ -4,8 +4,15 @@ import signal
 import time
 import os
 import sys
+from datetime import datetime
 
 sys.stdout.reconfigure(line_buffering=True)
+
+
+def log(msg):
+    """Print with timestamp."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {msg}", flush=True)
 
 # Global flag for graceful shutdown
 SHUTDOWN_REQUESTED = False
@@ -20,14 +27,14 @@ def check_hard_timeout():
     """Failsafe: Kill bot if it's been running too long (backup for timer)."""
     elapsed = time.time() - BOT_START_TIME
     if elapsed > MAX_RUNTIME_SECONDS:
-        print(f"⛔ FAILSAFE: Bot exceeded max runtime ({MAX_RUNTIME_SECONDS}s). Forcing exit.", flush=True)
+        log(f"⛔ FAILSAFE: Bot exceeded max runtime ({MAX_RUNTIME_SECONDS}s). Forcing exit.")
         sys.exit(1)
 
 
 def handle_shutdown(signum, frame):
     """Handle SIGTERM/SIGINT for graceful shutdown."""
     global SHUTDOWN_REQUESTED
-    print(f"🛑 Received signal {signum}, shutting down gracefully...", flush=True)
+    log(f"🛑 Received signal {signum}, shutting down gracefully...")
     SHUTDOWN_REQUESTED = True
 
 
@@ -35,7 +42,7 @@ def handle_timer_reset(signum, frame):
     """Handle SIGUSR1 to reset failsafe timer."""
     global BOT_START_TIME
     BOT_START_TIME = time.time()
-    print("🔄 Failsafe timer reset.", flush=True)
+    log("🔄 Failsafe timer reset.")
 
 
 signal.signal(signal.SIGTERM, handle_shutdown)
@@ -57,10 +64,10 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 def send_notification(msg):
     """Send Telegram notification. Returns True on success, False on failure."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram disabled (missing token/chat id)")
+        log("Telegram disabled (missing token/chat id)")
         return False
 
-    print(f"📤 Sending Telegram: {msg}", flush=True)
+    log(f"📤 Sending Telegram:\n{msg}")
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -68,17 +75,17 @@ def send_notification(msg):
             timeout=10,
         )
         if r.ok:
-            print(f"📱 Telegram sent: {msg}", flush=True)
+            log("📱 Telegram sent")
             return True
-        print(f"Telegram failed ({r.status_code}): {r.text}", flush=True)
+        log(f"Telegram failed ({r.status_code}): {r.text}")
         return False
     except Exception as e:
-        print(f"Telegram error: {e}", flush=True)
+        log(f"Telegram error: {e}")
         return False
 
 
 def login(page):
-    print("🔐 Login required")
+    log("🔐 Login required")
 
     page.goto(LOGIN_URL)
     page.fill('input[name="identifier"]', EMAIL)
@@ -96,7 +103,7 @@ def login(page):
     page.click('input.button.button-primary[type="submit"]')
 
     page.wait_for_selector("text=Synapse", timeout=60000)
-    print("✅ Login successful")
+    log("✅ Login successful")
 
 
 def ensure_logged_in(page):
@@ -104,10 +111,10 @@ def ensure_logged_in(page):
     time.sleep(3)
 
     if page.locator("text=Synapse").count() == 0:
-        print("⚠️ Session expired or invalid. Logging in again...")
+        log("⚠️ Session expired or invalid. Logging in again...")
         login(page)
     else:
-        print("🔐 Session valid")
+        log("🔐 Session valid")
 
 
 def start_synapse(context, page):
@@ -120,11 +127,11 @@ def start_synapse(context, page):
         launch_btn.click()
 
     synapse_page = new_page_info.value
-    print("🚀 Synapse opened")
+    log("🚀 Synapse opened")
 
     synapse_page.wait_for_selector(RESCUE_SELECTOR, timeout=60000)
     synapse_page.locator(RESCUE_SELECTOR).click()
-    print("🎯 Rescue Dashboard opened")
+    log("🎯 Rescue Dashboard opened")
 
     return synapse_page
 
@@ -139,7 +146,7 @@ def extract_case_info(page):
     try:
         case_row = page.locator('div.complete-row:has(button:has-text("Accept"))').first
         if case_row.count() == 0:
-            print("⚠️ No case row with Accept button found")
+            log("⚠️ No case row with Accept button found")
             return None, None, None
 
         hospital = get_text(case_row.locator("div.facility-name div").first)
@@ -148,7 +155,7 @@ def extract_case_info(page):
 
         return hospital, patient, patient_id
     except Exception as e:
-        print(f"⚠️ Error extracting case info: {e}")
+        log(f"⚠️ Error extracting case info: {e}")
         return None, None, None
 
 
@@ -170,27 +177,27 @@ def handle_new_case(page):
 
                 # Validate all fields: must exist, be non-empty, and patient_id must be numeric
                 if not hospital or not patient or not patient_id or not patient_id.isdigit():
-                    print(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
-                    print("⏭️ Ignoring notification (incomplete or invalid info)")
+                    log(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
+                    log("⏭️ Ignoring notification (incomplete or invalid info)")
                     return False
 
                 try:
                     accept_btn.first.click(force=True)
-                    print(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                    log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
                     if not send_notification(
                         f"🚨 Rescue case accepted!\n\n🏥 Hospital: {hospital}\n👤 Patient: {patient}\n🆔 Patient ID: {patient_id}"
                     ):
-                        print("❌ Telegram failed. Exiting bot.", flush=True)
+                        log("❌ Telegram failed. Exiting bot.")
                         sys.exit(1)
                     return True
                 except Exception as e:
-                    print(f"⚠️ Accept click failed (attempt {attempt + 1}): {e}")
+                    log(f"⚠️ Accept click failed (attempt {attempt + 1}): {e}")
             time.sleep(1)
 
-        print("⚠️ Accept button not found after 10 attempts")
+        log("⚠️ Accept button not found after 10 attempts")
         return False
     except Exception as e:
-        print(f"⚠️ Error in handle_new_case: {e}")
+        log(f"⚠️ Error in handle_new_case: {e}")
         return False
 
 
@@ -213,7 +220,7 @@ def interruptible_sleep(seconds):
 
 def bot_loop(page):
     last_state = None
-    print("👀 Bot running...")
+    log("👀 Bot running...")
 
     try:
         while not SHUTDOWN_REQUESTED:
@@ -221,26 +228,26 @@ def bot_loop(page):
             check_hard_timeout()
 
             if page.locator('input[name="identifier"]').count() > 0:
-                print("⚠️ Detected login page. Session expired, exiting bot.")
+                log("⚠️ Detected login page. Session expired, exiting bot.")
                 return
 
             case_count = get_case_count(page)
 
             if case_count > 0:
-                print(f"🔔 New case detected: {case_count}")
+                log(f"🔔 New case detected: {case_count}")
                 if handle_new_case(page):
                     last_state = "new_cases"
                 else:
                     # Failed to handle case - wait before retrying to avoid hammering the page
-                    print("⏳ Failed to handle case, waiting 10s before retrying...")
+                    log("⏳ Failed to handle case, waiting 10s before retrying...")
                     interruptible_sleep(10)
             elif last_state != "no_cases":
-                print("💤 No cases")
+                log("💤 No cases")
                 last_state = "no_cases"
 
             interruptible_sleep(2)
     except Exception as e:
-        print("⚠️ Unhandled bot error:", e)
+        log(f"⚠️ Unhandled bot error: {e}")
 
 
 # ================= MAIN =================
@@ -263,5 +270,5 @@ with sync_playwright() as p:
 
     finally:
         if browser:
-            print("🧹 Closing browser...")
+            log("🧹 Closing browser...")
             browser.close()
