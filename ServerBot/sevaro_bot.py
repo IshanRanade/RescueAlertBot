@@ -166,9 +166,10 @@ def handle_new_case(page):
             time.sleep(1)
             hospital, patient, patient_id = extract_case_info(page)
 
-            if not all([hospital, patient, patient_id]):
-                print(f"⚠️ Missing case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
-                print("⏭️ Ignoring notification (incomplete info)")
+            # Validate all fields: must exist, be non-empty, and patient_id must be numeric
+            if not hospital or not patient or not patient_id or not patient_id.isdigit():
+                print(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
+                print("⏭️ Ignoring notification (incomplete or invalid info)")
                 return
 
             try:
