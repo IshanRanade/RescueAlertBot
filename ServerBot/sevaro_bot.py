@@ -153,37 +153,45 @@ def extract_case_info(page):
 
 
 def handle_new_case(page):
-    """Handle a detected new case - reload, extract info, and accept if valid."""
-    page.reload()
-    page.wait_for_load_state("load", timeout=30000)
-    page.wait_for_selector(RESCUE_SELECTOR, timeout=15000)
-    page.locator(RESCUE_SELECTOR).click()
-    time.sleep(3)
+    """Handle a detected new case - reload, extract info, and accept if valid.
+    Returns True if case was accepted, False otherwise."""
+    try:
+        page.reload()
+        page.wait_for_load_state("load", timeout=30000)
+        page.wait_for_selector(RESCUE_SELECTOR, timeout=15000)
+        page.locator(RESCUE_SELECTOR).click()
+        time.sleep(3)
 
-    for _ in range(10):
-        accept_btn = page.locator('button:has-text("Accept")')
-        if accept_btn.count() > 0:
+        for attempt in range(10):
+            accept_btn = page.locator('button:has-text("Accept")')
+            if accept_btn.count() > 0:
+                time.sleep(1)
+                hospital, patient, patient_id = extract_case_info(page)
+
+                # Validate all fields: must exist, be non-empty, and patient_id must be numeric
+                if not hospital or not patient or not patient_id or not patient_id.isdigit():
+                    print(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
+                    print("⏭️ Ignoring notification (incomplete or invalid info)")
+                    return False
+
+                try:
+                    accept_btn.first.click(force=True)
+                    print(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                    if not send_notification(
+                        f"🚨 Rescue case accepted!\n\n🏥 Hospital: {hospital}\n👤 Patient: {patient}\n🆔 Patient ID: {patient_id}"
+                    ):
+                        print("❌ Telegram failed. Exiting bot.", flush=True)
+                        sys.exit(1)
+                    return True
+                except Exception as e:
+                    print(f"⚠️ Accept click failed (attempt {attempt + 1}): {e}")
             time.sleep(1)
-            hospital, patient, patient_id = extract_case_info(page)
 
-            # Validate all fields: must exist, be non-empty, and patient_id must be numeric
-            if not hospital or not patient or not patient_id or not patient_id.isdigit():
-                print(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
-                print("⏭️ Ignoring notification (incomplete or invalid info)")
-                return
-
-            try:
-                accept_btn.first.click(force=True)
-                print(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
-                if not send_notification(
-                    f"🚨 Rescue case accepted!\n\n🏥 Hospital: {hospital}\n👤 Patient: {patient}\n🆔 Patient ID: {patient_id}"
-                ):
-                    print("❌ Telegram failed. Exiting bot.", flush=True)
-                    sys.exit(1)
-                return
-            except Exception as e:
-                print("⚠️ Accept click failed:", e)
-        time.sleep(1)
+        print("⚠️ Accept button not found after 10 attempts")
+        return False
+    except Exception as e:
+        print(f"⚠️ Error in handle_new_case: {e}")
+        return False
 
 
 def get_case_count(page):
@@ -220,8 +228,12 @@ def bot_loop(page):
 
             if case_count > 0:
                 print(f"🔔 New case detected: {case_count}")
-                handle_new_case(page)
-                last_state = "new_cases"
+                if handle_new_case(page):
+                    last_state = "new_cases"
+                else:
+                    # Failed to handle case - wait before retrying to avoid hammering the page
+                    print("⏳ Failed to handle case, waiting 10s before retrying...")
+                    interruptible_sleep(10)
             elif last_state != "no_cases":
                 print("💤 No cases")
                 last_state = "no_cases"
