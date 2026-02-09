@@ -11,7 +11,7 @@ sys.stdout.reconfigure(line_buffering=True)
 
 def log(msg):
     """Print with timestamp."""
-    timestamp = datetime.now().strftime("%H:%M:%S")
+    timestamp = datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S %Z")
     print(f"[{timestamp}] {msg}", flush=True)
 
 # Global flag for graceful shutdown
