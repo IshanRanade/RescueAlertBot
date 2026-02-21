@@ -5,6 +5,7 @@ import requests
 import os
 import sys
 import time
+import json
 import logging
 from datetime import datetime
 from threading import Thread, Event, Lock
@@ -52,6 +53,8 @@ signal.signal(signal.SIGTERM, handle_container_shutdown)
 
 BOT_PROCESS = None
 BOT_LOCK = Lock()
+CASE_ACCEPTED_FILE = "case_accepted.json"
+CASE_ACKNOWLEDGED_FILE = "case_acknowledged"
 TIMER_THREAD = None
 TIMER_THREAD_LOCK = Lock()  # Separate lock for timer thread creation
 TIMER_STOP_EVENT = Event()
@@ -96,7 +99,7 @@ def is_bot_running():
 
 
 def get_status_data():
-    """Get current status and time remaining."""
+    """Get current status, time remaining, and acknowledge state."""
     with TIME_LOCK:
         t = TIME_LEFT
     h, rem = divmod(t, 3600)
@@ -105,7 +108,15 @@ def get_status_data():
     with BOT_LOCK:
         status = "RUNNING" if is_bot_running() else "STOPPED"
 
-    return {"status": status, "hours": h, "minutes": m, "seconds": s}
+    needs_acknowledge = os.path.exists(CASE_ACCEPTED_FILE)
+
+    return {
+        "status": status,
+        "hours": h,
+        "minutes": m,
+        "seconds": s,
+        "needs_acknowledge": needs_acknowledge,
+    }
 
 
 def reset_timer():
@@ -292,10 +303,19 @@ def refresh_timer():
     return redirect("/")
 
 
+@app.route("/acknowledge", methods=["POST"])
+def acknowledge():
+    if os.path.exists(CASE_ACCEPTED_FILE):
+        with open(CASE_ACKNOWLEDGED_FILE, "w") as f:
+            f.write("ack")
+        log("👤 User acknowledged accepted case.")
+    return redirect("/")
+
+
 @app.route("/status")
 def status():
     return jsonify(get_status_data())
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3267)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3267)))
