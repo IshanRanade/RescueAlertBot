@@ -8,6 +8,24 @@
         .timer { font-size: 1.5em; margin-top: 10px; }
         button { margin: 5px; padding: 10px 20px; }
         .form-section { margin-bottom: 20px; }
+        #ackBtn {
+            background-color: #ccc;
+            color: #888;
+            cursor: not-allowed;
+            border: 1px solid #aaa;
+            font-weight: bold;
+        }
+        #ackBtn.active {
+            background-color: #e74c3c;
+            color: #fff;
+            cursor: pointer;
+            border: 1px solid #c0392b;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.5); }
+            50% { box-shadow: 0 0 12px 4px rgba(231, 76, 60, 0.5); }
+        }
     </style>
 </head>
 <body>
@@ -36,6 +54,9 @@
     <form id="refreshForm" action="/refresh_timer" method="post">
         <button type="submit">Refresh Timer</button>
     </form>
+    <form id="ackForm" action="/acknowledge" method="post">
+        <button type="submit" id="ackBtn" disabled>Acknowledge Accept</button>
+    </form>
 </div>
 
 <p>Bot status: <span id="status">{{ status }}</span></p>
@@ -51,13 +72,19 @@ function updateStatus() {
                 data.hours.toString().padStart(2,'0') + ":" +
                 data.minutes.toString().padStart(2,'0') + ":" +
                 data.seconds.toString().padStart(2,'0');
+
+            var ackBtn = document.getElementById("ackBtn");
+            if (data.needs_acknowledge) {
+                ackBtn.disabled = false;
+                ackBtn.classList.add("active");
+            } else {
+                ackBtn.disabled = true;
+                ackBtn.classList.remove("active");
+            }
         });
 }
 
-// Poll status every second
 setInterval(updateStatus, 1000);
-
-// Update immediately on load
 updateStatus();
 </script>
 

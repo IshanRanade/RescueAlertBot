@@ -4,6 +4,7 @@ import signal
 import time
 import os
 import sys
+import json
 from datetime import datetime
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -50,6 +51,8 @@ signal.signal(signal.SIGINT, handle_shutdown)
 signal.signal(signal.SIGUSR1, handle_timer_reset)
 
 STATE_FILE = "okta_state.json"
+CASE_ACCEPTED_FILE = "case_accepted.json"
+CASE_ACKNOWLEDGED_FILE = "case_acknowledged"
 LOGIN_URL = "https://login.mysevaro.com"
 HOME_URL = "https://login.mysevaro.com/app/UserHome"
 RESCUE_SELECTOR = "li.rescue-dashboard-container a.nav-link"
@@ -159,6 +162,56 @@ def extract_case_info(page):
         return None, None, None
 
 
+def write_case_accepted(hospital, patient, patient_id):
+    """Write accepted case info to file so the Flask app can detect it."""
+    data = {
+        "hospital": hospital,
+        "patient": patient,
+        "patient_id": patient_id,
+        "accepted_at": datetime.now().astimezone().isoformat(),
+    }
+    with open(CASE_ACCEPTED_FILE, "w") as f:
+        json.dump(data, f)
+
+
+def clear_case_files():
+    """Remove case accepted/acknowledged files."""
+    for path in (CASE_ACCEPTED_FILE, CASE_ACKNOWLEDGED_FILE):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def wait_for_acknowledge(hospital, patient, patient_id):
+    """Send Telegram every 30 seconds until user acknowledges via the UI.
+    Blocks the bot from accepting new cases while waiting."""
+    msg = f"🚨 Rescue case accepted!\n\n🏥 Hospital: {hospital}\n👤 Patient: {patient}\n🆔 Patient ID: {patient_id}"
+    log("⏳ Waiting for user to acknowledge the accepted case...")
+
+    while not SHUTDOWN_REQUESTED:
+        check_hard_timeout()
+
+        if os.path.exists(CASE_ACKNOWLEDGED_FILE):
+            log("✅ Case acknowledged by user.")
+            clear_case_files()
+            return
+
+        if not send_notification(msg):
+            log("❌ Telegram failed. Exiting bot.")
+            clear_case_files()
+            sys.exit(1)
+
+        for _ in range(300):
+            if SHUTDOWN_REQUESTED or os.path.exists(CASE_ACKNOWLEDGED_FILE):
+                break
+            time.sleep(0.1)
+
+    if os.path.exists(CASE_ACKNOWLEDGED_FILE):
+        log("✅ Case acknowledged by user.")
+    clear_case_files()
+
+
 def handle_new_case(page):
     """Handle a detected new case - reload, extract info, and accept if valid.
     Returns True if case was accepted, False otherwise."""
@@ -175,7 +228,6 @@ def handle_new_case(page):
                 time.sleep(1)
                 hospital, patient, patient_id = extract_case_info(page)
 
-                # Validate all fields: must exist, be non-empty, and patient_id must be numeric
                 if not hospital or not patient or not patient_id or not patient_id.isdigit():
                     log(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
                     log("⏭️ Ignoring notification (incomplete or invalid info)")
@@ -184,11 +236,8 @@ def handle_new_case(page):
                 try:
                     accept_btn.first.click(force=True)
                     log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
-                    if not send_notification(
-                        f"🚨 Rescue case accepted!\n\n🏥 Hospital: {hospital}\n👤 Patient: {patient}\n🆔 Patient ID: {patient_id}"
-                    ):
-                        log("❌ Telegram failed. Exiting bot.")
-                        sys.exit(1)
+                    write_case_accepted(hospital, patient, patient_id)
+                    wait_for_acknowledge(hospital, patient, patient_id)
                     return True
                 except Exception as e:
                     log(f"⚠️ Accept click failed (attempt {attempt + 1}): {e}")
@@ -252,10 +301,32 @@ def bot_loop(page):
 
 # ================= MAIN =================
 
+def log_external_ip(playwright):
+    """Log the external IP address for verification."""
+    test_browser = None
+    try:
+        test_browser = playwright.chromium.launch(headless=True, args=["--disable-ipv6"])
+        test_context = test_browser.new_context()
+        test_page = test_context.new_page()
+        test_page.goto("https://api.ipify.org", timeout=15000)
+        ip = test_page.locator("body").text_content().strip()
+        log(f"🌐 External IP: {ip}")
+        test_browser.close()
+    except Exception as e:
+        log(f"⚠️ Could not determine external IP: {e}")
+        if test_browser:
+            test_browser.close()
+
+
 with sync_playwright() as p:
     browser = None
     try:
-        browser = p.chromium.launch(headless=True)
+        log_external_ip(p)
+
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-ipv6"]
+        )
 
         if os.path.exists(STATE_FILE) and os.path.getsize(STATE_FILE) > 0:
             context = browser.new_context(storage_state=STATE_FILE)
