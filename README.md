@@ -18,3 +18,5 @@ Then go to `http://localhost:3267/`
 
 `sudo docker compose up --build -d sevaro-bot`
 
+To do all at once:
+`sudo docker compose rm -sf sevaro-bot && sudo docker pull kingish123/sevaro-runner:latest && sudo docker compose up --build -d sevaro-bot`
