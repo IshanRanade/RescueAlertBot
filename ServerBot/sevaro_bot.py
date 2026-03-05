@@ -105,7 +105,7 @@ def login(page):
     page.type(totp_selector, OTP, delay=50)
     page.click('input.button.button-primary[type="submit"]')
 
-    page.wait_for_selector("text=Synapse", timeout=60000)
+    page.wait_for_selector("text=Synapse 2.0", timeout=60000)
     log("✅ Login successful")
 
 
@@ -113,7 +113,7 @@ def ensure_logged_in(page):
     page.goto(HOME_URL)
     time.sleep(3)
 
-    if page.locator("text=Synapse").count() == 0:
+    if page.locator("text=Synapse 2.0").count() == 0:
         log("⚠️ Session expired or invalid. Logging in again...")
         login(page)
     else:
@@ -121,7 +121,7 @@ def ensure_logged_in(page):
 
 
 def start_synapse(context, page):
-    page.get_by_role("button", name="Synapse").click()
+    page.get_by_role("button", name="Settings for Synapse 2.0").click()
 
     launch_btn = page.locator('[data-se="app-settings-launch-app-button"]')
     launch_btn.wait_for(state="visible", timeout=10000)
