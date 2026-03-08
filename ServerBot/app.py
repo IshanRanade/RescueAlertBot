@@ -7,13 +7,16 @@ import sys
 import time
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from threading import Thread, Event, Lock
+
+
+PST = timezone(timedelta(hours=-8), name="PST")
 
 
 def log(msg):
     """Print with timestamp."""
-    timestamp = datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S %Z")
+    timestamp = datetime.now(PST).strftime("%Y/%m/%d %H:%M:%S %Z")
     print(f"[{timestamp}] {msg}", flush=True)
 
 app = Flask(__name__)

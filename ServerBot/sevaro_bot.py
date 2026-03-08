@@ -5,14 +5,17 @@ import time
 import os
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 sys.stdout.reconfigure(line_buffering=True)
 
 
+PST = timezone(timedelta(hours=-8), name="PST")
+
+
 def log(msg):
     """Print with timestamp."""
-    timestamp = datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S %Z")
+    timestamp = datetime.now(PST).strftime("%Y/%m/%d %H:%M:%S %Z")
     print(f"[{timestamp}] {msg}", flush=True)
 
 # Global flag for graceful shutdown
@@ -56,6 +59,7 @@ CASE_ACKNOWLEDGED_FILE = "case_acknowledged"
 LOGIN_URL = "https://login.mysevaro.com"
 HOME_URL = "https://login.mysevaro.com/app/UserHome"
 RESCUE_SELECTOR = "li.rescue-dashboard-container a.nav-link"
+SYNAPSE_SELECTOR = '[data-se="app-card-title"][title="Synapse 2.0"]'
 
 EMAIL = os.environ.get("EMAIL")
 PASSWORD = os.environ.get("PASSWORD")
@@ -105,7 +109,7 @@ def login(page):
     page.type(totp_selector, OTP, delay=50)
     page.click('input.button.button-primary[type="submit"]')
 
-    page.wait_for_selector("text=Synapse 2.0", timeout=60000)
+    page.wait_for_selector(SYNAPSE_SELECTOR, timeout=60000)
     log("✅ Login successful")
 
 
@@ -113,7 +117,7 @@ def ensure_logged_in(page):
     page.goto(HOME_URL)
     time.sleep(3)
 
-    if page.locator("text=Synapse 2.0").count() == 0:
+    if page.locator(SYNAPSE_SELECTOR).count() == 0:
         log("⚠️ Session expired or invalid. Logging in again...")
         login(page)
     else:
@@ -132,11 +136,21 @@ def start_synapse(context, page):
     synapse_page = new_page_info.value
     log("🚀 Synapse opened")
 
-    synapse_page.wait_for_selector(RESCUE_SELECTOR, timeout=60000)
-    synapse_page.locator(RESCUE_SELECTOR).click()
-    log("🎯 Rescue Dashboard opened")
+    synapse_page.wait_for_load_state("load", timeout=60000)
 
-    return synapse_page
+    for attempt in range(3):
+        try:
+            synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=60000)
+            synapse_page.locator(RESCUE_SELECTOR).click()
+            log("🎯 Rescue Dashboard opened")
+            return synapse_page
+        except Exception as e:
+            log(f"⚠️ Rescue dashboard selector not found (attempt {attempt + 1}/3): {e}")
+            dump_page_html(synapse_page, f"start_synapse_attempt{attempt + 1}")
+            if attempt < 2:
+                time.sleep(10)
+
+    raise Exception("Could not find Rescue Dashboard after 3 attempts")
 
 
 def get_text(locator):
@@ -145,17 +159,17 @@ def get_text(locator):
 
 
 def extract_case_info(page):
-    """Extract hospital name, patient name, and patient ID from the rescue case row."""
+    """Extract hospital name, patient name, and patient ID from the case row."""
     try:
         case_row = page.locator('div.complete-row:has(button:has-text("Accept"))').first
         if case_row.count() == 0:
-            log("⚠️ No case row with Accept button found")
+            case_row = page.locator('div.complete-row').first
+        if case_row.count() == 0:
             return None, None, None
 
         hospital = get_text(case_row.locator("div.facility-name div").first)
         patient = get_text(case_row.locator('div[data-dd-action-name="rescue-dashboard-patient-name"] span[data-dd-privacy="mask"] span[apptruncatepopover]').first)
         patient_id = get_text(case_row.locator('span[data-dd-action-name="rescue-dashboard-mrn"]').first)
-
         return hospital, patient, patient_id
     except Exception as e:
         log(f"⚠️ Error extracting case info: {e}")
@@ -212,41 +226,48 @@ def wait_for_acknowledge(hospital, patient, patient_id):
     clear_case_files()
 
 
+def dump_page_html(page, label="debug"):
+    """Dump page HTML to a file for debugging."""
+    try:
+        ts = datetime.now(PST).strftime("%Y%m%d_%H%M%S")
+        path = f"data/page_{label}_{ts}.html"
+        html = page.content()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
+        log(f"📄 Page HTML dumped to {path}")
+    except Exception as e:
+        log(f"⚠️ Could not dump page HTML: {e}")
+
+
 def handle_new_case(page):
-    """Handle a detected new case - reload, extract info, and accept if valid.
+    """Look for an Accept button on the page and click it.
     Returns True if case was accepted, False otherwise."""
     try:
-        page.reload()
-        page.wait_for_load_state("load", timeout=30000)
-        page.wait_for_selector(RESCUE_SELECTOR, timeout=15000)
-        page.locator(RESCUE_SELECTOR).click()
-        time.sleep(3)
+        accept_selector = 'button:has-text("Accept")'
 
-        for attempt in range(10):
-            accept_btn = page.locator('button:has-text("Accept")')
-            if accept_btn.count() > 0:
+        for attempt in range(20):
+            btn = page.locator(accept_selector)
+            if btn.count() > 0:
                 time.sleep(1)
                 hospital, patient, patient_id = extract_case_info(page)
 
-                if not hospital or not patient or not patient_id or not patient_id.isdigit():
+                if not hospital or not patient or not patient_id:
                     log(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
-                    log("⏭️ Ignoring notification (incomplete or invalid info)")
+                    dump_page_html(page, "invalid_case_info")
                     return False
 
-                try:
-                    accept_btn.first.click(force=True)
-                    log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
-                    write_case_accepted(hospital, patient, patient_id)
-                    wait_for_acknowledge(hospital, patient, patient_id)
-                    return True
-                except Exception as e:
-                    log(f"⚠️ Accept click failed (attempt {attempt + 1}): {e}")
+                btn.first.click(force=True)
+                log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                write_case_accepted(hospital, patient, patient_id)
+                wait_for_acknowledge(hospital, patient, patient_id)
+                return True
             time.sleep(1)
 
-        log("⚠️ Accept button not found after 10 attempts")
+        log("💤 No Accept button (not credentialed for this case)")
         return False
     except Exception as e:
         log(f"⚠️ Error in handle_new_case: {e}")
+        dump_page_html(page, "handle_error")
         return False
 
 
@@ -273,7 +294,6 @@ def bot_loop(page):
 
     try:
         while not SHUTDOWN_REQUESTED:
-            # Failsafe: check hard timeout every loop iteration
             check_hard_timeout()
 
             if page.locator('input[name="identifier"]').count() > 0:
@@ -283,15 +303,13 @@ def bot_loop(page):
             case_count = get_case_count(page)
 
             if case_count > 0:
-                log(f"🔔 New case detected: {case_count}")
-                if handle_new_case(page):
-                    last_state = "new_cases"
-                else:
-                    # Failed to handle case - wait before retrying to avoid hammering the page
-                    log("⏳ Failed to handle case, waiting 10s before retrying...")
-                    interruptible_sleep(10)
-            elif last_state != "no_cases":
-                log("💤 No cases")
+                if last_state != "has_cases":
+                    log(f"🔔 New case detected: {case_count}")
+                handle_new_case(page)
+                last_state = "has_cases"
+            else:
+                if last_state != "no_cases":
+                    log("💤 No cases")
                 last_state = "no_cases"
 
             interruptible_sleep(2)
