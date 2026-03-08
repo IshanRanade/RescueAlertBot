@@ -5,14 +5,17 @@ import time
 import os
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 sys.stdout.reconfigure(line_buffering=True)
 
 
+PST = timezone(timedelta(hours=-8), name="PST")
+
+
 def log(msg):
     """Print with timestamp."""
-    timestamp = datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S %Z")
+    timestamp = datetime.now(PST).strftime("%Y/%m/%d %H:%M:%S %Z")
     print(f"[{timestamp}] {msg}", flush=True)
 
 # Global flag for graceful shutdown
@@ -56,6 +59,7 @@ CASE_ACKNOWLEDGED_FILE = "case_acknowledged"
 LOGIN_URL = "https://login.mysevaro.com"
 HOME_URL = "https://login.mysevaro.com/app/UserHome"
 RESCUE_SELECTOR = "li.rescue-dashboard-container a.nav-link"
+SYNAPSE_SELECTOR = '[data-se="app-card-title"][title="Synapse 2.0"]'
 
 EMAIL = os.environ.get("EMAIL")
 PASSWORD = os.environ.get("PASSWORD")
@@ -105,7 +109,7 @@ def login(page):
     page.type(totp_selector, OTP, delay=50)
     page.click('input.button.button-primary[type="submit"]')
 
-    page.wait_for_selector("text=Synapse 2.0", timeout=60000)
+    page.wait_for_selector(SYNAPSE_SELECTOR, timeout=60000)
     log("✅ Login successful")
 
 
@@ -113,7 +117,7 @@ def ensure_logged_in(page):
     page.goto(HOME_URL)
     time.sleep(3)
 
-    if page.locator("text=Synapse 2.0").count() == 0:
+    if page.locator(SYNAPSE_SELECTOR).count() == 0:
         log("⚠️ Session expired or invalid. Logging in again...")
         login(page)
     else:
