@@ -28,11 +28,12 @@ BOT_START_TIME = time.time()
 
 
 def check_hard_timeout():
-    """Failsafe: Kill bot if it's been running too long (backup for timer)."""
+    """Failsafe: Gracefully stop bot if it's been running too long (backup for timer)."""
+    global SHUTDOWN_REQUESTED
     elapsed = time.time() - BOT_START_TIME
     if elapsed > MAX_RUNTIME_SECONDS:
-        log(f"⛔ FAILSAFE: Bot exceeded max runtime ({MAX_RUNTIME_SECONDS}s). Forcing exit.")
-        sys.exit(1)
+        log(f"⛔ FAILSAFE: Bot exceeded max runtime ({MAX_RUNTIME_SECONDS}s). Shutting down gracefully.")
+        SHUTDOWN_REQUESTED = True
 
 
 def handle_shutdown(signum, frame):
@@ -74,7 +75,7 @@ def send_notification(msg):
         log("Telegram disabled (missing token/chat id)")
         return False
 
-    log(f"📤 Sending Telegram:\n{msg}")
+    log(f"📤 Sending Telegram: {msg}")
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -82,7 +83,7 @@ def send_notification(msg):
             timeout=10,
         )
         if r.ok:
-            log("📱 Telegram sent")
+            log(f"📱 Telegram sent: {msg}")
             return True
         log(f"Telegram failed ({r.status_code}): {r.text}")
         return False
@@ -124,7 +125,8 @@ def ensure_logged_in(page):
         log("🔐 Session valid")
 
 
-def start_synapse(context, page):
+def launch_synapse_tab(context, page):
+    """Open a new Synapse tab from the Okta home page. Returns the new page."""
     page.get_by_role("button", name="Settings for Synapse 2.0").click()
 
     launch_btn = page.locator('[data-se="app-settings-launch-app-button"]')
@@ -137,20 +139,43 @@ def start_synapse(context, page):
     log("🚀 Synapse opened")
 
     synapse_page.wait_for_load_state("load", timeout=60000)
+    return synapse_page
 
-    for attempt in range(3):
+
+def close_extra_pages(context, keep_page):
+    """Close all pages in the context except the one we want to keep."""
+    for p in context.pages:
+        if p != keep_page:
+            try:
+                p.close()
+            except Exception:
+                pass
+
+
+def start_synapse(context, page, max_attempts=3):
+    synapse_page = None
+
+    for attempt in range(max_attempts):
         try:
+            if synapse_page is None:
+                synapse_page = launch_synapse_tab(context, page)
             synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=60000)
             synapse_page.locator(RESCUE_SELECTOR).click()
             log("🎯 Rescue Dashboard opened")
             return synapse_page
         except Exception as e:
-            log(f"⚠️ Rescue dashboard selector not found (attempt {attempt + 1}/3): {e}")
-            dump_page_html(synapse_page, f"start_synapse_attempt{attempt + 1}")
-            if attempt < 2:
-                time.sleep(10)
+            log(f"⚠️ Rescue dashboard selector not found (attempt {attempt + 1}/{max_attempts}): {e}")
+            if synapse_page is not None:
+                dump_page_html(synapse_page, f"start_synapse_attempt{attempt + 1}")
+            if attempt < max_attempts - 1:
+                synapse_page = None
+                close_extra_pages(context, page)
+                log("🔄 Closing Synapse tab, will re-launch from Okta...")
+                page.bring_to_front()
+                page.reload(wait_until="load", timeout=60000)
+                time.sleep(5)
 
-    raise Exception("Could not find Rescue Dashboard after 3 attempts")
+    raise Exception(f"Could not find Rescue Dashboard after {max_attempts} attempts")
 
 
 def get_text(locator):
@@ -161,7 +186,7 @@ def get_text(locator):
 def extract_case_info(page):
     """Extract hospital name, patient name, and patient ID from the case row."""
     try:
-        case_row = page.locator('div.complete-row:has(button:has-text("Accept"))').first
+        case_row = page.locator('div.complete-row:has(button:text-is("Accept"))').first
         if case_row.count() == 0:
             case_row = page.locator('div.complete-row').first
         if case_row.count() == 0:
@@ -243,7 +268,7 @@ def handle_new_case(page):
     """Look for an Accept button on the page and click it.
     Returns True if case was accepted, False otherwise."""
     try:
-        accept_selector = 'button:has-text("Accept")'
+        accept_selector = 'button:text-is("Accept")'
 
         for attempt in range(20):
             btn = page.locator(accept_selector)
@@ -256,7 +281,18 @@ def handle_new_case(page):
                     dump_page_html(page, "invalid_case_info")
                     return False
 
-                btn.first.click(force=True)
+                for click_attempt in range(5):
+                    btn.first.click()
+                    time.sleep(2)
+                    if btn.count() == 0:
+                        break
+                    log(f"⚠️ Accept click didn't register for {patient_id} (attempt {click_attempt + 1}/5), retrying...")
+
+                if btn.count() > 0:
+                    log(f"❌ Failed to accept case {patient_id} after 5 attempts")
+                    dump_page_html(page, "accept_failed")
+                    return False
+
                 log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
                 write_case_accepted(hospital, patient, patient_id)
                 wait_for_acknowledge(hospital, patient, patient_id)
@@ -355,6 +391,7 @@ with sync_playwright() as p:
         ensure_logged_in(page)
         new_page = start_synapse(context, page)
         context.storage_state(path=STATE_FILE)
+        send_notification("🟢 Bot is now watching for rescue cases.")
         bot_loop(new_page)
 
     finally:

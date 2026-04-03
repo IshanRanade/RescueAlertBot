@@ -139,24 +139,23 @@ def reset_timer():
 
 
 def kill_bot_process():
-    """Forcefully kill bot process and all children. Must hold BOT_LOCK."""
+    """Gracefully stop bot process. Must hold BOT_LOCK."""
     if not is_bot_running():
         return
 
     try:
-        # Kill entire process group (bot + browser children)
-        os.killpg(BOT_PROCESS.pid, signal.SIGTERM)
-        BOT_PROCESS.wait(timeout=5)
-    except (subprocess.TimeoutExpired, ProcessLookupError, OSError):
-        pass
-
-    # Force kill if still alive
-    if is_bot_running():
+        # Signal only the Python process so it can cleanly close the browser
+        os.kill(BOT_PROCESS.pid, signal.SIGTERM)
+        BOT_PROCESS.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        # Process didn't exit gracefully; kill the entire process group
         try:
             os.killpg(BOT_PROCESS.pid, signal.SIGKILL)
             BOT_PROCESS.wait(timeout=5)
         except (subprocess.TimeoutExpired, ProcessLookupError, OSError):
             pass
+    except (ProcessLookupError, OSError):
+        pass
 
 
 def send_telegram_or_die(msg):
@@ -192,7 +191,7 @@ def start_bot_process(env):
             start_new_session=True,  # Create process group for clean kills
         )
 
-    if not send_telegram_or_die("🟢 Bot started and watching for rescue cases."):
+    if not send_telegram_or_die("🟢 Bot started."):
         return
 
     BOT_PROCESS.wait()
@@ -300,9 +299,10 @@ def stop():
 @app.route("/refresh_timer", methods=["POST"])
 def refresh_timer():
     with BOT_LOCK:
-        if is_bot_running():
-            reset_timer()
-            send_telegram_or_die("🔄 Timer refreshed to 1 hour.")
+        if not is_bot_running():
+            return redirect("/")
+        reset_timer()
+    send_telegram_or_die("🔄 Timer refreshed to 1 hour.")
     return redirect("/")
 
 
