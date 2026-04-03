@@ -300,9 +300,10 @@ def stop():
 @app.route("/refresh_timer", methods=["POST"])
 def refresh_timer():
     with BOT_LOCK:
-        if is_bot_running():
-            reset_timer()
-            send_telegram_or_die("🔄 Timer refreshed to 1 hour.")
+        if not is_bot_running():
+            return redirect("/")
+        reset_timer()
+    send_telegram_or_die("🔄 Timer refreshed to 1 hour.")
     return redirect("/")
 
 

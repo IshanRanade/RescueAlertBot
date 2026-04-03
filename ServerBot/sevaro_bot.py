@@ -28,11 +28,12 @@ BOT_START_TIME = time.time()
 
 
 def check_hard_timeout():
-    """Failsafe: Kill bot if it's been running too long (backup for timer)."""
+    """Failsafe: Gracefully stop bot if it's been running too long (backup for timer)."""
+    global SHUTDOWN_REQUESTED
     elapsed = time.time() - BOT_START_TIME
     if elapsed > MAX_RUNTIME_SECONDS:
-        log(f"⛔ FAILSAFE: Bot exceeded max runtime ({MAX_RUNTIME_SECONDS}s). Forcing exit.")
-        sys.exit(1)
+        log(f"⛔ FAILSAFE: Bot exceeded max runtime ({MAX_RUNTIME_SECONDS}s). Shutting down gracefully.")
+        SHUTDOWN_REQUESTED = True
 
 
 def handle_shutdown(signum, frame):
