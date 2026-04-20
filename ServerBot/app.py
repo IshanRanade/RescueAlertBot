@@ -36,19 +36,7 @@ WSGIRequestHandler.log_request = _filtered_log_request
 def handle_container_shutdown(signum, frame):
     """Handle container shutdown (SIGTERM from Docker)."""
     log("🛑 Container shutting down...")
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    if token and chat_id:
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                data={"chat_id": chat_id, "text": "🔴 Bot has stopped."},
-                timeout=5,
-            )
-            log("📱 Sent shutdown notification")
-        except Exception as e:
-            log(f"Failed to send shutdown notification: {e}")
-    
+    send_telegram("🔴 Bot has stopped.")
     sys.exit(0)
 
 
@@ -85,7 +73,7 @@ def send_telegram(msg):
             timeout=10,
         )
         if r.ok:
-            log(f"📱 Telegram sent: {msg}")
+            log(f"📱 Telegram sent:\n{msg}")
             return True
         log(f"Telegram failed ({r.status_code}): {r.text}")
         return False
@@ -182,7 +170,6 @@ def start_bot_process(env):
             log("Bot already running.")
             return
         reset_timer()
-        WARNING_SENT = False
         BOT_PROCESS = subprocess.Popen(
             ["python", "-u", "sevaro_bot.py"],
             env=env,

@@ -83,7 +83,7 @@ def send_notification(msg):
             timeout=10,
         )
         if r.ok:
-            log(f"📱 Telegram sent: {msg}")
+            log(f"📱 Telegram sent:\n{msg}")
             return True
         log(f"Telegram failed ({r.status_code}): {r.text}")
         return False
@@ -130,7 +130,7 @@ def launch_synapse_tab(context, page):
     page.get_by_role("button", name="Settings for Synapse 2.0").click()
 
     launch_btn = page.locator('[data-se="app-settings-launch-app-button"]')
-    launch_btn.wait_for(state="visible", timeout=10000)
+    launch_btn.wait_for(state="visible", timeout=60000)
 
     with context.expect_page() as new_page_info:
         launch_btn.click()
@@ -142,40 +142,21 @@ def launch_synapse_tab(context, page):
     return synapse_page
 
 
-def close_extra_pages(context, keep_page):
-    """Close all pages in the context except the one we want to keep."""
-    for p in context.pages:
-        if p != keep_page:
-            try:
-                p.close()
-            except Exception:
-                pass
 
-
-def start_synapse(context, page, max_attempts=3):
+def start_synapse(context, page):
     synapse_page = None
-
-    for attempt in range(max_attempts):
-        try:
-            if synapse_page is None:
-                synapse_page = launch_synapse_tab(context, page)
-            synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=60000)
-            synapse_page.locator(RESCUE_SELECTOR).click()
-            log("🎯 Rescue Dashboard opened")
-            return synapse_page
-        except Exception as e:
-            log(f"⚠️ Rescue dashboard selector not found (attempt {attempt + 1}/{max_attempts}): {e}")
-            if synapse_page is not None:
-                dump_page_html(synapse_page, f"start_synapse_attempt{attempt + 1}")
-            if attempt < max_attempts - 1:
-                synapse_page = None
-                close_extra_pages(context, page)
-                log("🔄 Closing Synapse tab, will re-launch from Okta...")
-                page.bring_to_front()
-                page.reload(wait_until="load", timeout=60000)
-                time.sleep(5)
-
-    raise Exception(f"Could not find Rescue Dashboard after {max_attempts} attempts")
+    try:
+        synapse_page = launch_synapse_tab(context, page)
+        synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=120000)
+        synapse_page.locator(RESCUE_SELECTOR).click()
+        log("🎯 Rescue Dashboard opened")
+        return synapse_page
+    except Exception as e:
+        log(f"⚠️ Synapse failed to load: {e}")
+        if synapse_page is not None:
+            dump_page_html(synapse_page, "start_synapse_failed")
+        send_notification("❌ Synapse failed to load. Please start the bot again.")
+        raise
 
 
 def get_text(locator):
@@ -270,37 +251,41 @@ def handle_new_case(page):
     try:
         accept_selector = 'button:text-is("Accept")'
 
-        for attempt in range(20):
-            btn = page.locator(accept_selector)
-            if btn.count() > 0:
-                time.sleep(1)
-                hospital, patient, patient_id = extract_case_info(page)
+        try:
+            page.wait_for_selector(accept_selector, state="visible", timeout=20000)
+        except Exception:
+            log("💤 No Accept button (not credentialed for this case)")
+            return False
 
-                if not hospital or not patient or not patient_id:
-                    log(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
-                    dump_page_html(page, "invalid_case_info")
-                    return False
+        time.sleep(1)
+        hospital, patient, patient_id = extract_case_info(page)
 
-                for click_attempt in range(5):
-                    btn.first.click()
-                    time.sleep(2)
-                    if btn.count() == 0:
-                        break
-                    log(f"⚠️ Accept click didn't register for {patient_id} (attempt {click_attempt + 1}/5), retrying...")
+        if not hospital or not patient or not patient_id:
+            log(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
+            dump_page_html(page, "invalid_case_info")
+            return False
 
-                if btn.count() > 0:
-                    log(f"❌ Failed to accept case {patient_id} after 5 attempts")
-                    dump_page_html(page, "accept_failed")
-                    return False
+        btn = page.locator(accept_selector)
+        for click_attempt in range(5):
+            if btn.count() == 0:
+                break
+            btn.first.click()
+            time.sleep(2)
+            if btn.count() == 0:
+                break
+            log(f"⚠️ Accept click didn't register for {patient_id} (attempt {click_attempt + 1}/5), reloading page...")
+            page.reload(wait_until="load", timeout=30000)
+            time.sleep(3)
 
-                log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
-                write_case_accepted(hospital, patient, patient_id)
-                wait_for_acknowledge(hospital, patient, patient_id)
-                return True
-            time.sleep(1)
+        if btn.count() > 0:
+            log(f"❌ Failed to accept case {patient_id} after 5 attempts")
+            dump_page_html(page, "accept_failed")
+            return False
 
-        log("💤 No Accept button (not credentialed for this case)")
-        return False
+        log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+        write_case_accepted(hospital, patient, patient_id)
+        wait_for_acknowledge(hospital, patient, patient_id)
+        return True
     except Exception as e:
         log(f"⚠️ Error in handle_new_case: {e}")
         dump_page_html(page, "handle_error")
@@ -391,7 +376,9 @@ with sync_playwright() as p:
         ensure_logged_in(page)
         new_page = start_synapse(context, page)
         context.storage_state(path=STATE_FILE)
-        send_notification("🟢 Bot is now watching for rescue cases.")
+        if not send_notification("🟢 Bot is now watching for rescue cases."):
+            log("❌ Telegram failed. Exiting bot.")
+            sys.exit(1)
         bot_loop(new_page)
 
     finally:
