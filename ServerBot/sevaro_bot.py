@@ -54,13 +54,13 @@ signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
 signal.signal(signal.SIGUSR1, handle_timer_reset)
 
-STATE_FILE = "okta_state.json"
 CASE_ACCEPTED_FILE = "case_accepted.json"
 CASE_ACKNOWLEDGED_FILE = "case_acknowledged"
 LOGIN_URL = "https://login.mysevaro.com"
 HOME_URL = "https://login.mysevaro.com/app/UserHome"
 RESCUE_SELECTOR = "li.rescue-dashboard-container a.nav-link"
 SYNAPSE_SELECTOR = '[data-se="app-card-title"][title="Synapse 2.0"]'
+NOTIFICATION_POPUP_SELECTOR = "div.rescue-notification-container"
 
 EMAIL = os.environ.get("EMAIL")
 PASSWORD = os.environ.get("PASSWORD")
@@ -112,17 +112,7 @@ def login(page):
 
     page.wait_for_selector(SYNAPSE_SELECTOR, timeout=60000)
     log("✅ Login successful")
-
-
-def ensure_logged_in(page):
-    page.goto(HOME_URL)
-    time.sleep(3)
-
-    if page.locator(SYNAPSE_SELECTOR).count() == 0:
-        log("⚠️ Session expired or invalid. Logging in again...")
-        login(page)
-    else:
-        log("🔐 Session valid")
+    dump_page_html(page, "after_login")
 
 
 def launch_synapse_tab(context, page):
@@ -130,7 +120,7 @@ def launch_synapse_tab(context, page):
     page.get_by_role("button", name="Settings for Synapse 2.0").click()
 
     launch_btn = page.locator('[data-se="app-settings-launch-app-button"]')
-    launch_btn.wait_for(state="visible", timeout=60000)
+    launch_btn.wait_for(state="visible", timeout=15000)
 
     with context.expect_page() as new_page_info:
         launch_btn.click()
@@ -138,30 +128,61 @@ def launch_synapse_tab(context, page):
     synapse_page = new_page_info.value
     log("🚀 Synapse opened")
 
-    synapse_page.wait_for_load_state("load", timeout=60000)
+    synapse_page.wait_for_load_state("load", timeout=30000)
+    dump_page_html(synapse_page, "after_synapse_opened")
     return synapse_page
 
 
+SYNAPSE_RENDER_TIMEOUT_MS = 15000
+SYNAPSE_MAX_RETRIES = 3
+
+
+def _synapse_app_is_healthy(synapse_page):
+    """Check if the Synapse SPA rendered with a sidebar (not an empty shell)."""
+    try:
+        synapse_page.wait_for_selector(
+            RESCUE_SELECTOR, state="visible", timeout=SYNAPSE_RENDER_TIMEOUT_MS
+        )
+        return True
+    except Exception:
+        return False
+
 
 def start_synapse(context, page):
-    synapse_page = None
-    try:
-        synapse_page = launch_synapse_tab(context, page)
-        synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=120000)
-        synapse_page.locator(RESCUE_SELECTOR).click()
-        log("🎯 Rescue Dashboard opened")
-        return synapse_page
-    except Exception as e:
-        log(f"⚠️ Synapse failed to load: {e}")
-        if synapse_page is not None:
-            dump_page_html(synapse_page, "start_synapse_failed")
+    for attempt in range(1, SYNAPSE_MAX_RETRIES + 1):
+        synapse_page = None
         try:
-            open(STATE_FILE, "w").close()
-            log("🗑️ Cleared saved session so next start forces a fresh login.")
-        except OSError:
-            pass
-        send_notification("❌ Synapse failed to load. Please start the bot again.")
-        raise
+            synapse_page = launch_synapse_tab(context, page)
+
+            if _synapse_app_is_healthy(synapse_page):
+                synapse_page.locator(RESCUE_SELECTOR).click()
+                log("🎯 Rescue Dashboard opened")
+                dump_page_html(synapse_page, "after_rescue_dashboard")
+                return synapse_page
+
+            log(f"⚠️ Synapse loaded without sidebar (attempt {attempt}/{SYNAPSE_MAX_RETRIES})")
+            dump_page_html(synapse_page, f"synapse_no_sidebar_attempt{attempt}")
+
+        except Exception as e:
+            log(f"⚠️ Synapse failed to load (attempt {attempt}/{SYNAPSE_MAX_RETRIES}): {e}")
+            if synapse_page is not None:
+                dump_page_html(synapse_page, f"synapse_error_attempt{attempt}")
+
+        if synapse_page is not None:
+            try:
+                synapse_page.close()
+            except Exception:
+                pass
+
+        if attempt < SYNAPSE_MAX_RETRIES:
+            log("🔄 Closing Synapse tab, relaunching from Okta...")
+            page.bring_to_front()
+            page.goto(HOME_URL)
+            page.wait_for_load_state("load", timeout=30000)
+            time.sleep(3)
+
+    send_notification("❌ Synapse failed to load. Please start the bot again.")
+    raise RuntimeError("Synapse failed to load after all attempts")
 
 
 def get_text(locator):
@@ -172,7 +193,7 @@ def get_text(locator):
 def extract_case_info(page):
     """Extract hospital name, patient name, and patient ID from the case row."""
     try:
-        case_row = page.locator('div.complete-row:has(button:text-is("Accept"))').first
+        case_row = page.locator('div.complete-row:has(button:has-text("Accept"))').first
         if case_row.count() == 0:
             case_row = page.locator('div.complete-row').first
         if case_row.count() == 0:
@@ -184,6 +205,22 @@ def extract_case_info(page):
         return hospital, patient, patient_id
     except Exception as e:
         log(f"⚠️ Error extracting case info: {e}")
+        return None, None, None
+
+
+def extract_notification_case_info(page):
+    """Extract hospital, patient name, and patient ID from the notification popup."""
+    try:
+        popup = page.locator(NOTIFICATION_POPUP_SELECTOR).first
+        if popup.count() == 0:
+            return None, None, None
+
+        hospital = get_text(popup.locator('[data-dd-action-name="rescue-notification-facility-name"]').first)
+        patient = get_text(popup.locator('[data-dd-action-name="rescue-notification-patient-name"]').first)
+        patient_id = get_text(popup.locator('[data-dd-action-name="rescue-notification-patient-mrn"]').first)
+        return hospital, patient, patient_id
+    except Exception as e:
+        log(f"⚠️ Error extracting notification case info: {e}")
         return None, None, None
 
 
@@ -252,41 +289,58 @@ def dump_page_html(page, label="debug"):
 
 def handle_new_case(page):
     """Look for an Accept button on the page and click it.
+    Uses the same proven poll-and-click approach from v1.2/v1.3: find the button,
+    extract case info, click, and trust the click succeeded.
     Returns True if case was accepted, False otherwise."""
     try:
-        accept_selector = 'button:text-is("Accept")'
+        accept_selector = 'button:has-text("Accept")'
 
-        try:
-            page.wait_for_selector(accept_selector, state="visible", timeout=20000)
-        except Exception:
-            log("💤 No Accept button (not credentialed for this case)")
-            return False
+        for attempt in range(20):
+            if SHUTDOWN_REQUESTED:
+                return False
 
-        time.sleep(1)
-        hospital, patient, patient_id = extract_case_info(page)
+            # Check notification popup first (overlays dashboard with higher z-index)
+            popup = page.locator(NOTIFICATION_POPUP_SELECTOR)
+            if popup.count() > 0:
+                popup_accept = popup.locator(accept_selector)
+                if popup_accept.count() > 0:
+                    log("📢 Notification popup detected, using popup Accept button")
+                    hospital, patient, patient_id = extract_notification_case_info(page)
 
-        if not hospital or not patient or not patient_id:
-            log(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
-            dump_page_html(page, "invalid_case_info")
-            return False
+                    if not hospital or not patient or not patient_id:
+                        log(f"⚠️ Invalid notification case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
+                        dump_page_html(page, "invalid_notification_info")
+                        time.sleep(1)
+                        continue
 
-        case_row = page.locator(f'div.complete-row:has(span[data-dd-action-name="rescue-dashboard-mrn"]:text-is("{patient_id}"))') 
-        case_btn = case_row.locator(accept_selector)
-        case_btn.first.click()
-        time.sleep(2)
+                    popup_accept.first.click(force=True)
+                    log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                    write_case_accepted(hospital, patient, patient_id)
+                    wait_for_acknowledge(hospital, patient, patient_id)
+                    return True
 
-        if case_btn.count() > 0:
-            log(f"❌ Failed to accept case {patient_id}")
-            dump_page_html(page, "accept_failed")
-            if not send_notification(f"⚠️ Case appeared but was unable to accept. You need to manually accept case.\n\n🏥 Hospital: {hospital}\n👤 Patient: {patient}\n🆔 Patient ID: {patient_id}"):
-                log("❌ Telegram failed. Exiting bot.")
-                sys.exit(1)
-            return False
+            # Fall back to dashboard row Accept button
+            btn = page.locator(accept_selector)
+            if btn.count() > 0:
+                time.sleep(1)
+                hospital, patient, patient_id = extract_case_info(page)
 
-        log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
-        write_case_accepted(hospital, patient, patient_id)
-        wait_for_acknowledge(hospital, patient, patient_id)
-        return True
+                if not hospital or not patient or not patient_id:
+                    log(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
+                    dump_page_html(page, "invalid_case_info")
+                    time.sleep(1)
+                    continue
+
+                btn.first.click(force=True)
+                log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                write_case_accepted(hospital, patient, patient_id)
+                wait_for_acknowledge(hospital, patient, patient_id)
+                return True
+
+            time.sleep(1)
+
+        log("💤 No Accept button (not credentialed for this case)")
+        return False
     except Exception as e:
         log(f"⚠️ Error in handle_new_case: {e}")
         dump_page_html(page, "handle_error")
@@ -310,6 +364,17 @@ def interruptible_sleep(seconds):
         time.sleep(0.1)
 
 
+def _refresh_dashboard(page):
+    """Click the Rescue Dashboard link to refresh SPA data without a full page reload."""
+    try:
+        rescue_link = page.locator(RESCUE_SELECTOR)
+        if rescue_link.count() > 0 and rescue_link.first.is_visible():
+            rescue_link.first.click()
+            time.sleep(2)
+    except Exception as e:
+        log(f"⚠️ Dashboard refresh failed: {e}")
+
+
 def bot_loop(page):
     last_state = None
     log("👀 Bot running...")
@@ -320,7 +385,10 @@ def bot_loop(page):
 
             if page.locator('input[name="identifier"]').count() > 0:
                 log("⚠️ Detected login page. Session expired, exiting bot.")
+                send_notification("❌ Session expired while running. Please start the bot again.")
                 return
+
+            _refresh_dashboard(page)
 
             case_count = get_case_count(page)
 
@@ -368,15 +436,10 @@ with sync_playwright() as p:
             args=["--disable-ipv6"]
         )
 
-        if os.path.exists(STATE_FILE) and os.path.getsize(STATE_FILE) > 0:
-            context = browser.new_context(storage_state=STATE_FILE)
-        else:
-            context = browser.new_context()
-
+        context = browser.new_context()
         page = context.new_page()
-        ensure_logged_in(page)
+        login(page)
         new_page = start_synapse(context, page)
-        context.storage_state(path=STATE_FILE)
         if not send_notification("🟢 Bot is now watching for rescue cases."):
             log("❌ Telegram failed. Exiting bot.")
             sys.exit(1)
