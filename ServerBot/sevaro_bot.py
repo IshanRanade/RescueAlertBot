@@ -267,6 +267,22 @@ def dump_page_html(page, label="debug"):
         log(f"⚠️ Could not dump page HTML: {e}")
 
 
+ACCEPT_WAIT_TIMEOUT_MS = 15000
+ACCEPT_MAX_RETRIES = 3
+
+
+def _click_and_wait_for_accept(btn_locator, wait_selector, page, label):
+    """Click an Accept button and wait for it to disappear.
+    Returns True if the button disappeared (accept succeeded), False otherwise."""
+    btn_locator.first.click()
+    try:
+        page.wait_for_selector(wait_selector, state="hidden", timeout=ACCEPT_WAIT_TIMEOUT_MS)
+        return True
+    except Exception:
+        log(f"⏳ Accept button still present after {ACCEPT_WAIT_TIMEOUT_MS}ms ({label})")
+        return False
+
+
 def _accept_via_notification_popup(page):
     """Try to accept a case using the notification popup overlay.
     Returns (True, hospital, patient, patient_id) on success, (False, ...) on failure."""
@@ -289,25 +305,9 @@ def _accept_via_notification_popup(page):
         log("⚠️ Notification popup has no Accept button")
         return False, None, None, None
 
-    popup_accept.first.click()
-    time.sleep(3)
-
-    still_has_accept = (
-        popup.count() > 0
-        and popup.locator(accept_selector).count() > 0
-    )
-    if still_has_accept:
-        log(f"❌ Failed to accept case {patient_id} via notification popup")
-        dump_page_html(page, "accept_failed")
-        if not send_notification(
-            f"⚠️ Case appeared but was unable to accept. You need to manually accept case.\n\n"
-            f"🏥 Hospital: {hospital}\n👤 Patient: {patient}\n🆔 Patient ID: {patient_id}"
-        ):
-            log("❌ Telegram failed. Exiting bot.")
-            sys.exit(1)
-        return False, hospital, patient, patient_id
-
-    return True, hospital, patient, patient_id
+    popup_selector = f"{NOTIFICATION_POPUP_SELECTOR} {accept_selector}"
+    accepted = _click_and_wait_for_accept(popup_accept, popup_selector, page, "notification popup")
+    return accepted, hospital, patient, patient_id
 
 
 def _accept_via_dashboard_row(page):
@@ -321,36 +321,24 @@ def _accept_via_dashboard_row(page):
         dump_page_html(page, "invalid_case_info")
         return False, None, None, None
 
-    case_row = page.locator(
-        f'div.complete-row:has(span[data-dd-action-name="rescue-dashboard-mrn"]:text-is("{patient_id}"))'
-    )
+    row_selector = f'div.complete-row:has(span[data-dd-action-name="rescue-dashboard-mrn"]:text-is("{patient_id}"))'
+    case_row = page.locator(row_selector)
     case_btn = case_row.locator(accept_selector)
 
     if case_btn.count() == 0:
         log(f"⚠️ No Accept button in dashboard row for case {patient_id}")
         return False, hospital, patient, patient_id
 
-    case_btn.first.click()
-    time.sleep(3)
-
-    if case_btn.count() > 0:
-        log(f"❌ Failed to accept case {patient_id} via dashboard row")
-        dump_page_html(page, "accept_failed")
-        if not send_notification(
-            f"⚠️ Case appeared but was unable to accept. You need to manually accept case.\n\n"
-            f"🏥 Hospital: {hospital}\n👤 Patient: {patient}\n🆔 Patient ID: {patient_id}"
-        ):
-            log("❌ Telegram failed. Exiting bot.")
-            sys.exit(1)
-        return False, hospital, patient, patient_id
-
-    return True, hospital, patient, patient_id
+    wait_selector = f'{row_selector} {accept_selector}'
+    accepted = _click_and_wait_for_accept(case_btn, wait_selector, page, "dashboard row")
+    return accepted, hospital, patient, patient_id
 
 
 def handle_new_case(page):
     """Look for an Accept button on the page and click it.
     Tries the notification popup first (it overlays the dashboard with higher z-index),
-    then falls back to the dashboard row.
+    then falls back to the dashboard row. Retries up to ACCEPT_MAX_RETRIES times
+    before notifying the user of failure.
     Returns True if case was accepted, False otherwise."""
     try:
         accept_selector = 'button:text-is("Accept")'
@@ -363,19 +351,47 @@ def handle_new_case(page):
 
         time.sleep(1)
 
-        accepted, hospital, patient, patient_id = _accept_via_notification_popup(page)
+        last_hospital, last_patient, last_patient_id = None, None, None
 
-        if not accepted:
-            log("⬇️ Falling back to dashboard row Accept")
-            accepted, hospital, patient, patient_id = _accept_via_dashboard_row(page)
+        for attempt in range(1, ACCEPT_MAX_RETRIES + 1):
+            if SHUTDOWN_REQUESTED:
+                return False
 
-        if not accepted:
-            return False
+            if attempt > 1:
+                if page.locator(accept_selector).count() == 0:
+                    log("ℹ️ Accept button gone before retry (case removed or accepted elsewhere)")
+                    return False
+                time.sleep(1)
 
-        log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
-        write_case_accepted(hospital, patient, patient_id)
-        wait_for_acknowledge(hospital, patient, patient_id)
-        return True
+            log(f"🔄 Accept attempt {attempt}/{ACCEPT_MAX_RETRIES}")
+
+            accepted, hospital, patient, patient_id = _accept_via_notification_popup(page)
+            if hospital:
+                last_hospital, last_patient, last_patient_id = hospital, patient, patient_id
+
+            if not accepted:
+                if attempt == 1:
+                    log("⬇️ Falling back to dashboard row Accept")
+                accepted, hospital, patient, patient_id = _accept_via_dashboard_row(page)
+                if hospital:
+                    last_hospital, last_patient, last_patient_id = hospital, patient, patient_id
+
+            if accepted:
+                log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                write_case_accepted(hospital, patient, patient_id)
+                wait_for_acknowledge(hospital, patient, patient_id)
+                return True
+
+        log(f"❌ Failed to accept case after {ACCEPT_MAX_RETRIES} attempts")
+        dump_page_html(page, "accept_failed")
+        if last_patient_id:
+            if not send_notification(
+                f"⚠️ Case appeared but was unable to accept. You need to manually accept case.\n\n"
+                f"🏥 Hospital: {last_hospital}\n👤 Patient: {last_patient}\n🆔 Patient ID: {last_patient_id}"
+            ):
+                log("❌ Telegram failed. Exiting bot.")
+                sys.exit(1)
+        return False
     except Exception as e:
         log(f"⚠️ Error in handle_new_case: {e}")
         dump_page_html(page, "handle_error")
