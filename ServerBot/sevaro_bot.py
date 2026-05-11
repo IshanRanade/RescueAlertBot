@@ -144,25 +144,45 @@ def launch_synapse_tab(context, page):
 
 
 
+SYNAPSE_MAX_RETRIES = 3
+
+
 def start_synapse(context, page):
-    synapse_page = None
-    try:
-        synapse_page = launch_synapse_tab(context, page)
-        synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=120000)
-        synapse_page.locator(RESCUE_SELECTOR).click()
-        log("🎯 Rescue Dashboard opened")
-        return synapse_page
-    except Exception as e:
-        log(f"⚠️ Synapse failed to load: {e}")
-        if synapse_page is not None:
-            dump_page_html(synapse_page, "start_synapse_failed")
+    for attempt in range(1, SYNAPSE_MAX_RETRIES + 1):
+        synapse_page = None
         try:
-            open(STATE_FILE, "w").close()
-            log("🗑️ Cleared saved session so next start forces a fresh login.")
-        except OSError:
-            pass
-        send_notification("❌ Synapse failed to load. Please start the bot again.")
-        raise
+            synapse_page = launch_synapse_tab(context, page)
+            synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=120000)
+            synapse_page.locator(RESCUE_SELECTOR).click()
+            log("🎯 Rescue Dashboard opened")
+            return synapse_page
+        except Exception as e:
+            log(f"⚠️ Synapse failed to load (attempt {attempt}/{SYNAPSE_MAX_RETRIES}): {e}")
+            if synapse_page is not None:
+                dump_page_html(synapse_page, "start_synapse_failed")
+                try:
+                    synapse_page.close()
+                except Exception:
+                    pass
+
+            if attempt < SYNAPSE_MAX_RETRIES:
+                log(f"🔄 Retrying Synapse launch (attempt {attempt + 1}/{SYNAPSE_MAX_RETRIES})...")
+                page.goto(HOME_URL)
+                page.wait_for_load_state("load", timeout=30000)
+                time.sleep(3)
+                if page.locator(SYNAPSE_SELECTOR).count() == 0:
+                    log("⚠️ Session lost during Synapse failure. Cannot re-login (OTP expired).")
+                    break
+            else:
+                break
+
+    try:
+        open(STATE_FILE, "w").close()
+        log("🗑️ Cleared saved session so next start forces a fresh login.")
+    except OSError:
+        pass
+    send_notification("❌ Synapse failed to load. Please start the bot again.")
+    raise RuntimeError("Synapse failed to load after all attempts")
 
 
 def get_text(locator):
