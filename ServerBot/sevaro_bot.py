@@ -193,7 +193,7 @@ def get_text(locator):
 def extract_case_info(page):
     """Extract hospital name, patient name, and patient ID from the case row."""
     try:
-        case_row = page.locator('div.complete-row:has(button:text-is("Accept"))').first
+        case_row = page.locator('div.complete-row:has(button:has-text("Accept"))').first
         if case_row.count() == 0:
             case_row = page.locator('div.complete-row').first
         if case_row.count() == 0:
@@ -287,26 +287,23 @@ def dump_page_html(page, label="debug"):
         log(f"⚠️ Could not dump page HTML: {e}")
 
 
-ACCEPT_WAIT_TIMEOUT_MS = 15000
 ACCEPT_MAX_RETRIES = 3
 
 
-def _click_and_wait_for_accept(btn_locator, wait_selector, page, label):
-    """Click an Accept button and wait for it to disappear.
-    Returns True if the button disappeared (accept succeeded), False otherwise."""
-    btn_locator.first.click()
-    try:
-        page.wait_for_selector(wait_selector, state="hidden", timeout=ACCEPT_WAIT_TIMEOUT_MS)
-        return True
-    except Exception:
-        log(f"⏳ Accept button still present after {ACCEPT_WAIT_TIMEOUT_MS}ms ({label})")
+def _verify_accept_on_dashboard(page, patient_id, accept_selector):
+    """Check the dashboard row to confirm a case was truly accepted.
+    Returns True if the Accept button is gone from the row (case accepted)."""
+    row_selector = f'div.complete-row:has(span[data-dd-action-name="rescue-dashboard-mrn"]:text-is("{patient_id}"))'
+    row_btn = page.locator(f'{row_selector} {accept_selector}')
+    if row_btn.count() > 0 and row_btn.first.is_visible():
         return False
+    return True
 
 
 def _accept_via_notification_popup(page):
     """Try to accept a case using the notification popup overlay.
     Returns (True, hospital, patient, patient_id) on success, (False, ...) on failure."""
-    accept_selector = 'button:text-is("Accept")'
+    accept_selector = 'button:has-text("Accept")'
     popup = page.locator(NOTIFICATION_POPUP_SELECTOR)
 
     if popup.count() == 0:
@@ -325,15 +322,19 @@ def _accept_via_notification_popup(page):
         log("⚠️ Notification popup has no Accept button")
         return False, None, None, None
 
-    popup_selector = f"{NOTIFICATION_POPUP_SELECTOR} {accept_selector}"
-    accepted = _click_and_wait_for_accept(popup_accept, popup_selector, page, "notification popup")
+    popup_accept.first.click(force=True)
+    time.sleep(3)
+
+    accepted = _verify_accept_on_dashboard(page, patient_id, accept_selector)
+    if not accepted:
+        log(f"⏳ Dashboard row still shows Accept for {patient_id} after popup click")
     return accepted, hospital, patient, patient_id
 
 
 def _accept_via_dashboard_row(page):
     """Try to accept a case using the dashboard row Accept button.
     Returns (True, hospital, patient, patient_id) on success, (False, ...) on failure."""
-    accept_selector = 'button:text-is("Accept")'
+    accept_selector = 'button:has-text("Accept")'
 
     hospital, patient, patient_id = extract_case_info(page)
     if not hospital or not patient or not patient_id:
@@ -349,8 +350,12 @@ def _accept_via_dashboard_row(page):
         log(f"⚠️ No Accept button in dashboard row for case {patient_id}")
         return False, hospital, patient, patient_id
 
-    wait_selector = f'{row_selector} {accept_selector}'
-    accepted = _click_and_wait_for_accept(case_btn, wait_selector, page, "dashboard row")
+    case_btn.first.click(force=True)
+    time.sleep(3)
+
+    accepted = _verify_accept_on_dashboard(page, patient_id, accept_selector)
+    if not accepted:
+        log(f"⏳ Accept button still visible for {patient_id} after dashboard row click")
     return accepted, hospital, patient, patient_id
 
 
@@ -361,7 +366,7 @@ def handle_new_case(page):
     before notifying the user of failure.
     Returns True if case was accepted, False otherwise."""
     try:
-        accept_selector = 'button:text-is("Accept")'
+        accept_selector = 'button:has-text("Accept")'
 
         try:
             page.wait_for_selector(accept_selector, state="visible", timeout=20000)
