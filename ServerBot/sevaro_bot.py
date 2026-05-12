@@ -112,8 +112,7 @@ def login(page):
 
     page.wait_for_selector(SYNAPSE_SELECTOR, timeout=60000)
     log("✅ Login successful")
-
-
+    dump_page_html(page, "after_login")
 
 
 def launch_synapse_tab(context, page):
@@ -130,6 +129,7 @@ def launch_synapse_tab(context, page):
     log("🚀 Synapse opened")
 
     synapse_page.wait_for_load_state("load", timeout=30000)
+    dump_page_html(synapse_page, "after_synapse_opened")
     return synapse_page
 
 
@@ -140,6 +140,7 @@ def start_synapse(context, page):
         synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=30000)
         synapse_page.locator(RESCUE_SELECTOR).click()
         log("🎯 Rescue Dashboard opened")
+        dump_page_html(synapse_page, "after_rescue_dashboard")
         return synapse_page
     except Exception as e:
         log(f"⚠️ Synapse failed to load: {e}")
