@@ -133,49 +133,56 @@ def launch_synapse_tab(context, page):
     return synapse_page
 
 
-SYNAPSE_LOAD_TIMEOUT_MS = 15000
-SYNAPSE_MAX_RELOADS = 3
+SYNAPSE_RENDER_TIMEOUT_MS = 15000
+SYNAPSE_MAX_RETRIES = 3
 
 
-def wait_for_synapse_app(synapse_page):
-    """Wait for the Synapse Angular app to finish rendering.
-    If it gets stuck (layout present but hidden), reload and retry."""
-    app_selector = "app-sidebar, app-layout-container"
-
-    for attempt in range(1, SYNAPSE_MAX_RELOADS + 1):
-        try:
-            synapse_page.wait_for_selector(app_selector, state="visible", timeout=SYNAPSE_LOAD_TIMEOUT_MS)
-            log("📦 Synapse app rendered")
-            return
-        except Exception:
-            stuck = synapse_page.locator(app_selector).count() > 0
-            if stuck:
-                log(f"⚠️ Synapse app stuck loading (attempt {attempt}/{SYNAPSE_MAX_RELOADS}), reloading...")
-                dump_page_html(synapse_page, f"synapse_stuck_attempt{attempt}")
-                synapse_page.reload(wait_until="load", timeout=30000)
-            else:
-                log(f"⚠️ Synapse app not in DOM (attempt {attempt}/{SYNAPSE_MAX_RELOADS})")
-                break
-
-    raise RuntimeError("Synapse app failed to render after reloads")
+def _synapse_app_is_healthy(synapse_page):
+    """Check if the Synapse SPA rendered with a sidebar (not an empty shell)."""
+    try:
+        synapse_page.wait_for_selector(
+            RESCUE_SELECTOR, state="visible", timeout=SYNAPSE_RENDER_TIMEOUT_MS
+        )
+        return True
+    except Exception:
+        return False
 
 
 def start_synapse(context, page):
-    synapse_page = None
-    try:
-        synapse_page = launch_synapse_tab(context, page)
-        wait_for_synapse_app(synapse_page)
-        synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=30000)
-        synapse_page.locator(RESCUE_SELECTOR).click()
-        log("🎯 Rescue Dashboard opened")
-        dump_page_html(synapse_page, "after_rescue_dashboard")
-        return synapse_page
-    except Exception as e:
-        log(f"⚠️ Synapse failed to load: {e}")
+    for attempt in range(1, SYNAPSE_MAX_RETRIES + 1):
+        synapse_page = None
+        try:
+            synapse_page = launch_synapse_tab(context, page)
+
+            if _synapse_app_is_healthy(synapse_page):
+                synapse_page.locator(RESCUE_SELECTOR).click()
+                log("🎯 Rescue Dashboard opened")
+                dump_page_html(synapse_page, "after_rescue_dashboard")
+                return synapse_page
+
+            log(f"⚠️ Synapse loaded without sidebar (attempt {attempt}/{SYNAPSE_MAX_RETRIES})")
+            dump_page_html(synapse_page, f"synapse_no_sidebar_attempt{attempt}")
+
+        except Exception as e:
+            log(f"⚠️ Synapse failed to load (attempt {attempt}/{SYNAPSE_MAX_RETRIES}): {e}")
+            if synapse_page is not None:
+                dump_page_html(synapse_page, f"synapse_error_attempt{attempt}")
+
         if synapse_page is not None:
-            dump_page_html(synapse_page, "start_synapse_failed")
-        send_notification("❌ Synapse failed to load. Please start the bot again.")
-        raise
+            try:
+                synapse_page.close()
+            except Exception:
+                pass
+
+        if attempt < SYNAPSE_MAX_RETRIES:
+            log("🔄 Closing Synapse tab, relaunching from Okta...")
+            page.bring_to_front()
+            page.goto(HOME_URL)
+            page.wait_for_load_state("load", timeout=30000)
+            time.sleep(3)
+
+    send_notification("❌ Synapse failed to load. Please start the bot again.")
+    raise RuntimeError("Synapse failed to load after all attempts")
 
 
 def get_text(locator):
