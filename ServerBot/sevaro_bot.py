@@ -129,6 +129,8 @@ def launch_synapse_tab(context, page):
     log("🚀 Synapse opened")
 
     synapse_page.wait_for_load_state("load", timeout=30000)
+    synapse_page.wait_for_selector("app-sidebar, app-layout-container", state="visible", timeout=60000)
+    log("📦 Synapse app rendered")
     dump_page_html(synapse_page, "after_synapse_opened")
     return synapse_page
 
@@ -137,7 +139,7 @@ def start_synapse(context, page):
     synapse_page = None
     try:
         synapse_page = launch_synapse_tab(context, page)
-        synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=30000)
+        synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=60000)
         synapse_page.locator(RESCUE_SELECTOR).click()
         log("🎯 Rescue Dashboard opened")
         dump_page_html(synapse_page, "after_rescue_dashboard")
