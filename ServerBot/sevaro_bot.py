@@ -54,7 +54,6 @@ signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
 signal.signal(signal.SIGUSR1, handle_timer_reset)
 
-STATE_FILE = "okta_state.json"
 CASE_ACCEPTED_FILE = "case_accepted.json"
 CASE_ACKNOWLEDGED_FILE = "case_acknowledged"
 LOGIN_URL = "https://login.mysevaro.com"
@@ -115,15 +114,6 @@ def login(page):
     log("✅ Login successful")
 
 
-def ensure_logged_in(page):
-    page.goto(HOME_URL)
-    time.sleep(3)
-
-    if page.locator(SYNAPSE_SELECTOR).count() == 0:
-        log("⚠️ Session expired or invalid. Logging in again...")
-        login(page)
-    else:
-        log("🔐 Session valid")
 
 
 def launch_synapse_tab(context, page):
@@ -155,14 +145,8 @@ def start_synapse(context, page):
         log(f"⚠️ Synapse failed to load: {e}")
         if synapse_page is not None:
             dump_page_html(synapse_page, "start_synapse_failed")
-
-    try:
-        open(STATE_FILE, "w").close()
-        log("🗑️ Cleared saved session so next start forces a fresh login.")
-    except OSError:
-        pass
-    send_notification("❌ Synapse failed to load. Please start the bot again.")
-    raise RuntimeError("Synapse failed to load")
+        send_notification("❌ Synapse failed to load. Please start the bot again.")
+        raise
 
 
 def get_text(locator):
@@ -430,6 +414,7 @@ def bot_loop(page):
 
             if page.locator('input[name="identifier"]').count() > 0:
                 log("⚠️ Detected login page. Session expired, exiting bot.")
+                send_notification("❌ Session expired while running. Please start the bot again.")
                 return
 
             case_count = get_case_count(page)
@@ -478,15 +463,10 @@ with sync_playwright() as p:
             args=["--disable-ipv6"]
         )
 
-        if os.path.exists(STATE_FILE) and os.path.getsize(STATE_FILE) > 0:
-            context = browser.new_context(storage_state=STATE_FILE)
-        else:
-            context = browser.new_context()
-
+        context = browser.new_context()
         page = context.new_page()
-        ensure_logged_in(page)
+        login(page)
         new_page = start_synapse(context, page)
-        context.storage_state(path=STATE_FILE)
         if not send_notification("🟢 Bot is now watching for rescue cases."):
             log("❌ Telegram failed. Exiting bot.")
             sys.exit(1)
