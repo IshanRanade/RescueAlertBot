@@ -131,7 +131,7 @@ def launch_synapse_tab(context, page):
     page.get_by_role("button", name="Settings for Synapse 2.0").click()
 
     launch_btn = page.locator('[data-se="app-settings-launch-app-button"]')
-    launch_btn.wait_for(state="visible", timeout=60000)
+    launch_btn.wait_for(state="visible", timeout=15000)
 
     with context.expect_page() as new_page_info:
         launch_btn.click()
@@ -139,42 +139,22 @@ def launch_synapse_tab(context, page):
     synapse_page = new_page_info.value
     log("🚀 Synapse opened")
 
-    synapse_page.wait_for_load_state("load", timeout=60000)
+    synapse_page.wait_for_load_state("load", timeout=30000)
     return synapse_page
 
 
-
-SYNAPSE_MAX_RETRIES = 3
-
-
 def start_synapse(context, page):
-    for attempt in range(1, SYNAPSE_MAX_RETRIES + 1):
-        synapse_page = None
-        try:
-            synapse_page = launch_synapse_tab(context, page)
-            synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=120000)
-            synapse_page.locator(RESCUE_SELECTOR).click()
-            log("🎯 Rescue Dashboard opened")
-            return synapse_page
-        except Exception as e:
-            log(f"⚠️ Synapse failed to load (attempt {attempt}/{SYNAPSE_MAX_RETRIES}): {e}")
-            if synapse_page is not None:
-                dump_page_html(synapse_page, "start_synapse_failed")
-                try:
-                    synapse_page.close()
-                except Exception:
-                    pass
-
-            if attempt < SYNAPSE_MAX_RETRIES:
-                log(f"🔄 Retrying Synapse launch (attempt {attempt + 1}/{SYNAPSE_MAX_RETRIES})...")
-                page.goto(HOME_URL)
-                page.wait_for_load_state("load", timeout=30000)
-                time.sleep(3)
-                if page.locator(SYNAPSE_SELECTOR).count() == 0:
-                    log("⚠️ Session lost during Synapse failure. Cannot re-login (OTP expired).")
-                    break
-            else:
-                break
+    synapse_page = None
+    try:
+        synapse_page = launch_synapse_tab(context, page)
+        synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=30000)
+        synapse_page.locator(RESCUE_SELECTOR).click()
+        log("🎯 Rescue Dashboard opened")
+        return synapse_page
+    except Exception as e:
+        log(f"⚠️ Synapse failed to load: {e}")
+        if synapse_page is not None:
+            dump_page_html(synapse_page, "start_synapse_failed")
 
     try:
         open(STATE_FILE, "w").close()
@@ -182,7 +162,7 @@ def start_synapse(context, page):
     except OSError:
         pass
     send_notification("❌ Synapse failed to load. Please start the bot again.")
-    raise RuntimeError("Synapse failed to load after all attempts")
+    raise RuntimeError("Synapse failed to load")
 
 
 def get_text(locator):
