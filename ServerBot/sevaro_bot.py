@@ -129,17 +129,43 @@ def launch_synapse_tab(context, page):
     log("🚀 Synapse opened")
 
     synapse_page.wait_for_load_state("load", timeout=30000)
-    synapse_page.wait_for_selector("app-sidebar, app-layout-container", state="visible", timeout=60000)
-    log("📦 Synapse app rendered")
     dump_page_html(synapse_page, "after_synapse_opened")
     return synapse_page
+
+
+SYNAPSE_LOAD_TIMEOUT_MS = 15000
+SYNAPSE_MAX_RELOADS = 3
+
+
+def wait_for_synapse_app(synapse_page):
+    """Wait for the Synapse Angular app to finish rendering.
+    If it gets stuck (layout present but hidden), reload and retry."""
+    app_selector = "app-sidebar, app-layout-container"
+
+    for attempt in range(1, SYNAPSE_MAX_RELOADS + 1):
+        try:
+            synapse_page.wait_for_selector(app_selector, state="visible", timeout=SYNAPSE_LOAD_TIMEOUT_MS)
+            log("📦 Synapse app rendered")
+            return
+        except Exception:
+            stuck = synapse_page.locator(app_selector).count() > 0
+            if stuck:
+                log(f"⚠️ Synapse app stuck loading (attempt {attempt}/{SYNAPSE_MAX_RELOADS}), reloading...")
+                dump_page_html(synapse_page, f"synapse_stuck_attempt{attempt}")
+                synapse_page.reload(wait_until="load", timeout=30000)
+            else:
+                log(f"⚠️ Synapse app not in DOM (attempt {attempt}/{SYNAPSE_MAX_RELOADS})")
+                break
+
+    raise RuntimeError("Synapse app failed to render after reloads")
 
 
 def start_synapse(context, page):
     synapse_page = None
     try:
         synapse_page = launch_synapse_tab(context, page)
-        synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=60000)
+        wait_for_synapse_app(synapse_page)
+        synapse_page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=30000)
         synapse_page.locator(RESCUE_SELECTOR).click()
         log("🎯 Rescue Dashboard opened")
         dump_page_html(synapse_page, "after_rescue_dashboard")
