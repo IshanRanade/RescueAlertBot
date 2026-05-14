@@ -359,6 +359,15 @@ def _accept_via_dashboard_row(page):
     return accepted, hospital, patient, patient_id
 
 
+def _reload_rescue_dashboard(page):
+    """Reload the page and re-navigate to the Rescue Dashboard so the DOM is fresh."""
+    page.reload()
+    page.wait_for_load_state("load", timeout=30000)
+    page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=15000)
+    page.locator(RESCUE_SELECTOR).click()
+    time.sleep(3)
+
+
 def handle_new_case(page):
     """Look for an Accept button on the page and click it.
     Tries the notification popup first (it overlays the dashboard with higher z-index),
@@ -367,6 +376,16 @@ def handle_new_case(page):
     Returns True if case was accepted, False otherwise."""
     try:
         accept_selector = 'button:has-text("Accept")'
+
+        # Check for notification popup before reloading (it may disappear on reload)
+        popup_visible = page.locator(NOTIFICATION_POPUP_SELECTOR).count() > 0
+
+        if not popup_visible:
+            try:
+                _reload_rescue_dashboard(page)
+            except Exception as e:
+                log(f"⚠️ Failed to reload rescue dashboard: {e}")
+                dump_page_html(page, "reload_failed")
 
         try:
             page.wait_for_selector(accept_selector, state="visible", timeout=20000)
@@ -458,8 +477,12 @@ def bot_loop(page):
             if case_count > 0:
                 if last_state != "has_cases":
                     log(f"🔔 New case detected: {case_count}")
-                handle_new_case(page)
-                last_state = "has_cases"
+                if handle_new_case(page):
+                    last_state = "has_cases"
+                else:
+                    log("⏳ Failed to handle case, waiting 10s before retrying...")
+                    last_state = "has_cases"
+                    interruptible_sleep(10)
             else:
                 if last_state != "no_cases":
                     log("💤 No cases")
