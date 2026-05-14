@@ -287,154 +287,59 @@ def dump_page_html(page, label="debug"):
         log(f"⚠️ Could not dump page HTML: {e}")
 
 
-ACCEPT_MAX_RETRIES = 3
-
-
-def _verify_accept_on_dashboard(page, patient_id, accept_selector):
-    """Check the dashboard row to confirm a case was truly accepted.
-    Returns True if the Accept button is gone from the row (case accepted)."""
-    row_selector = f'div.complete-row:has(span[data-dd-action-name="rescue-dashboard-mrn"]:text-is("{patient_id}"))'
-    row_btn = page.locator(f'{row_selector} {accept_selector}')
-    if row_btn.count() > 0 and row_btn.first.is_visible():
-        return False
-    return True
-
-
-def _accept_via_notification_popup(page):
-    """Try to accept a case using the notification popup overlay.
-    Returns (True, hospital, patient, patient_id) on success, (False, ...) on failure."""
-    accept_selector = 'button:has-text("Accept")'
-    popup = page.locator(NOTIFICATION_POPUP_SELECTOR)
-
-    if popup.count() == 0:
-        return False, None, None, None
-
-    log("📢 Notification popup detected, using popup Accept button")
-    hospital, patient, patient_id = extract_notification_case_info(page)
-
-    if not hospital or not patient or not patient_id:
-        log(f"⚠️ Invalid notification case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
-        dump_page_html(page, "invalid_notification_info")
-        return False, None, None, None
-
-    popup_accept = popup.locator(accept_selector)
-    if popup_accept.count() == 0:
-        log("⚠️ Notification popup has no Accept button")
-        return False, None, None, None
-
-    popup_accept.first.click(force=True)
-    time.sleep(3)
-
-    accepted = _verify_accept_on_dashboard(page, patient_id, accept_selector)
-    if not accepted:
-        log(f"⏳ Dashboard row still shows Accept for {patient_id} after popup click")
-    return accepted, hospital, patient, patient_id
-
-
-def _accept_via_dashboard_row(page):
-    """Try to accept a case using the dashboard row Accept button.
-    Returns (True, hospital, patient, patient_id) on success, (False, ...) on failure."""
-    accept_selector = 'button:has-text("Accept")'
-
-    hospital, patient, patient_id = extract_case_info(page)
-    if not hospital or not patient or not patient_id:
-        log(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
-        dump_page_html(page, "invalid_case_info")
-        return False, None, None, None
-
-    row_selector = f'div.complete-row:has(span[data-dd-action-name="rescue-dashboard-mrn"]:text-is("{patient_id}"))'
-    case_row = page.locator(row_selector)
-    case_btn = case_row.locator(accept_selector)
-
-    if case_btn.count() == 0:
-        log(f"⚠️ No Accept button in dashboard row for case {patient_id}")
-        return False, hospital, patient, patient_id
-
-    case_btn.first.click(force=True)
-    time.sleep(3)
-
-    accepted = _verify_accept_on_dashboard(page, patient_id, accept_selector)
-    if not accepted:
-        log(f"⏳ Accept button still visible for {patient_id} after dashboard row click")
-    return accepted, hospital, patient, patient_id
-
-
-def _reload_rescue_dashboard(page):
-    """Reload the page and re-navigate to the Rescue Dashboard so the DOM is fresh."""
-    page.reload()
-    page.wait_for_load_state("load", timeout=30000)
-    page.wait_for_selector(RESCUE_SELECTOR, state="visible", timeout=15000)
-    page.locator(RESCUE_SELECTOR).click()
-    time.sleep(3)
-
-
 def handle_new_case(page):
     """Look for an Accept button on the page and click it.
-    Tries the notification popup first (it overlays the dashboard with higher z-index),
-    then falls back to the dashboard row. Retries up to ACCEPT_MAX_RETRIES times
-    before notifying the user of failure.
+    Uses the same proven poll-and-click approach from v1.2/v1.3: find the button,
+    extract case info, click, and trust the click succeeded.
     Returns True if case was accepted, False otherwise."""
     try:
         accept_selector = 'button:has-text("Accept")'
 
-        # Check for notification popup before reloading (it may disappear on reload)
-        popup_visible = page.locator(NOTIFICATION_POPUP_SELECTOR).count() > 0
-
-        if not popup_visible:
-            try:
-                _reload_rescue_dashboard(page)
-            except Exception as e:
-                log(f"⚠️ Failed to reload rescue dashboard: {e}")
-                dump_page_html(page, "reload_failed")
-
-        try:
-            page.wait_for_selector(accept_selector, state="visible", timeout=20000)
-        except Exception:
-            log("💤 No Accept button (not credentialed for this case)")
-            return False
-
-        time.sleep(1)
-
-        last_hospital, last_patient, last_patient_id = None, None, None
-
-        for attempt in range(1, ACCEPT_MAX_RETRIES + 1):
+        for attempt in range(20):
             if SHUTDOWN_REQUESTED:
                 return False
 
-            if attempt > 1:
-                if page.locator(accept_selector).count() == 0:
-                    log("ℹ️ Accept button gone before retry (case removed or accepted elsewhere)")
-                    return False
+            # Check notification popup first (overlays dashboard with higher z-index)
+            popup = page.locator(NOTIFICATION_POPUP_SELECTOR)
+            if popup.count() > 0:
+                popup_accept = popup.locator(accept_selector)
+                if popup_accept.count() > 0:
+                    log("📢 Notification popup detected, using popup Accept button")
+                    hospital, patient, patient_id = extract_notification_case_info(page)
+
+                    if not hospital or not patient or not patient_id:
+                        log(f"⚠️ Invalid notification case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
+                        dump_page_html(page, "invalid_notification_info")
+                        time.sleep(1)
+                        continue
+
+                    popup_accept.first.click(force=True)
+                    log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                    write_case_accepted(hospital, patient, patient_id)
+                    wait_for_acknowledge(hospital, patient, patient_id)
+                    return True
+
+            # Fall back to dashboard row Accept button
+            btn = page.locator(accept_selector)
+            if btn.count() > 0:
                 time.sleep(1)
+                hospital, patient, patient_id = extract_case_info(page)
 
-            log(f"🔄 Accept attempt {attempt}/{ACCEPT_MAX_RETRIES}")
+                if not hospital or not patient or not patient_id:
+                    log(f"⚠️ Invalid case info - Hospital: {hospital}, Patient: {patient}, ID: {patient_id}")
+                    dump_page_html(page, "invalid_case_info")
+                    time.sleep(1)
+                    continue
 
-            accepted, hospital, patient, patient_id = _accept_via_notification_popup(page)
-            if hospital:
-                last_hospital, last_patient, last_patient_id = hospital, patient, patient_id
-
-            if not accepted:
-                if attempt == 1:
-                    log("⬇️ Falling back to dashboard row Accept")
-                accepted, hospital, patient, patient_id = _accept_via_dashboard_row(page)
-                if hospital:
-                    last_hospital, last_patient, last_patient_id = hospital, patient, patient_id
-
-            if accepted:
+                btn.first.click(force=True)
                 log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
                 write_case_accepted(hospital, patient, patient_id)
                 wait_for_acknowledge(hospital, patient, patient_id)
                 return True
 
-        log(f"❌ Failed to accept case after {ACCEPT_MAX_RETRIES} attempts")
-        dump_page_html(page, "accept_failed")
-        if last_patient_id:
-            if not send_notification(
-                f"⚠️ Case appeared but was unable to accept. You need to manually accept case.\n\n"
-                f"🏥 Hospital: {last_hospital}\n👤 Patient: {last_patient}\n🆔 Patient ID: {last_patient_id}"
-            ):
-                log("❌ Telegram failed. Exiting bot.")
-                sys.exit(1)
+            time.sleep(1)
+
+        log("💤 No Accept button (not credentialed for this case)")
         return False
     except Exception as e:
         log(f"⚠️ Error in handle_new_case: {e}")
@@ -459,6 +364,17 @@ def interruptible_sleep(seconds):
         time.sleep(0.1)
 
 
+def _refresh_dashboard(page):
+    """Click the Rescue Dashboard link to refresh SPA data without a full page reload."""
+    try:
+        rescue_link = page.locator(RESCUE_SELECTOR)
+        if rescue_link.count() > 0 and rescue_link.first.is_visible():
+            rescue_link.first.click()
+            time.sleep(2)
+    except Exception as e:
+        log(f"⚠️ Dashboard refresh failed: {e}")
+
+
 def bot_loop(page):
     last_state = None
     log("👀 Bot running...")
@@ -472,17 +388,15 @@ def bot_loop(page):
                 send_notification("❌ Session expired while running. Please start the bot again.")
                 return
 
+            _refresh_dashboard(page)
+
             case_count = get_case_count(page)
 
             if case_count > 0:
                 if last_state != "has_cases":
                     log(f"🔔 New case detected: {case_count}")
-                if handle_new_case(page):
-                    last_state = "has_cases"
-                else:
-                    log("⏳ Failed to handle case, waiting 10s before retrying...")
-                    last_state = "has_cases"
-                    interruptible_sleep(10)
+                handle_new_case(page)
+                last_state = "has_cases"
             else:
                 if last_state != "no_cases":
                     log("💤 No cases")
