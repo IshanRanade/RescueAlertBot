@@ -21,7 +21,7 @@
 19. There is an "Acknowledge Accept" button in the UI.  Once the bot accepts a case, it will keep sending a telegram notification every 30 seconds, and block accepting any new cases until the user hits this "Acknowledge Accept" button.
 20. The "Acknowledge Accept" will be grayed out normally, but will become active once the bot has accepted a new case.  Once the user hits this button it will gray out again.
 21. If the failsafe goes off, it will kill the bot but the website is still accessible and the user can start the bot again in the future
-22. If the bot fails to accept, it will notify the user and then continue looking for future accepts
+22. If the bot fails to accept a case that the user is credentialed for, it will notify the user and then continue looking for future accepts
 
 ## To build the package and publish to docker hub:
 

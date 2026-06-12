@@ -134,7 +134,7 @@ def launch_synapse_tab(context, page):
 
 
 SYNAPSE_RENDER_TIMEOUT_MS = 15000
-SYNAPSE_MAX_RETRIES = 3
+SYNAPSE_MAX_RETRIES = 5
 
 
 def _synapse_app_is_healthy(synapse_page):
@@ -278,7 +278,7 @@ def dump_page_html(page, label="debug"):
     """Dump page HTML to a file for debugging."""
     try:
         ts = datetime.now(PST).strftime("%Y%m%d_%H%M%S")
-        path = f"data/page_{label}_{ts}.html"
+        path = f"data/{ts}_{label}.html"
         html = page.content()
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
@@ -291,19 +291,30 @@ def handle_new_case(page):
     """Look for an Accept button on the page and click it.
     Uses the same proven poll-and-click approach from v1.2/v1.3: find the button,
     extract case info, click, and trust the click succeeded.
-    Returns True if case was accepted, False otherwise."""
+    Returns: "accepted" if case was accepted,
+             "not_credentialed" if no Accept button found (user not credentialed),
+             "failed" if credentialed but could not complete acceptance."""
     try:
         accept_selector = 'button:has-text("Accept")'
+        saw_accept_button = False
+
+        # Ensure we're on the rescue dashboard before looking for buttons
+        try:
+            page.locator(RESCUE_DASHBOARD_INDICATOR).wait_for(state="attached", timeout=5000)
+        except Exception:
+            log("⚠️ Not on rescue dashboard, attempting navigation")
+            _refresh_dashboard(page)
 
         for attempt in range(20):
             if SHUTDOWN_REQUESTED:
-                return False
+                return "not_credentialed"
 
             # Check notification popup first (overlays dashboard with higher z-index)
             popup = page.locator(NOTIFICATION_POPUP_SELECTOR)
             if popup.count() > 0:
                 popup_accept = popup.locator(accept_selector)
                 if popup_accept.count() > 0:
+                    saw_accept_button = True
                     log("📢 Notification popup detected, using popup Accept button")
                     hospital, patient, patient_id = extract_notification_case_info(page)
 
@@ -315,13 +326,15 @@ def handle_new_case(page):
 
                     popup_accept.first.click(force=True)
                     log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                    dump_page_html(page, "accepted_popup")
                     write_case_accepted(hospital, patient, patient_id)
                     wait_for_acknowledge(hospital, patient, patient_id)
-                    return True
+                    return "accepted"
 
             # Fall back to dashboard row Accept button
             btn = page.locator(accept_selector)
             if btn.count() > 0:
+                saw_accept_button = True
                 time.sleep(1)
                 hospital, patient, patient_id = extract_case_info(page)
 
@@ -333,18 +346,25 @@ def handle_new_case(page):
 
                 btn.first.click(force=True)
                 log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                dump_page_html(page, "accepted_dashboard")
                 write_case_accepted(hospital, patient, patient_id)
                 wait_for_acknowledge(hospital, patient, patient_id)
-                return True
+                return "accepted"
 
             time.sleep(1)
 
-        log("💤 No Accept button (not credentialed for this case)")
-        return False
+        if saw_accept_button:
+            log("⚠️ Accept button was visible but could not complete accept")
+            dump_page_html(page, "failed_accept_credentialed")
+            return "failed"
+        else:
+            log("💤 No Accept button (not credentialed for this case)")
+            dump_page_html(page, "no_accept_button")
+            return "not_credentialed"
     except Exception as e:
         log(f"⚠️ Error in handle_new_case: {e}")
         dump_page_html(page, "handle_error")
-        return False
+        return "failed"
 
 
 def get_case_count(page):
@@ -364,38 +384,61 @@ def interruptible_sleep(seconds):
         time.sleep(0.1)
 
 
+RESCUE_DASHBOARD_INDICATOR = "app-rescue-dashboard"
+
+
 def _refresh_dashboard(page):
-    """Click the Rescue Dashboard link to refresh SPA data without a full page reload."""
+    """Reload the page to force fresh data, then navigate to Rescue Dashboard."""
     try:
+        page.reload(wait_until="load", timeout=30000)
         rescue_link = page.locator(RESCUE_SELECTOR)
-        if rescue_link.count() > 0 and rescue_link.first.is_visible():
-            rescue_link.first.click()
-            time.sleep(2)
+        rescue_link.first.wait_for(state="visible", timeout=15000)
+        rescue_link.first.click()
+        page.locator(RESCUE_DASHBOARD_INDICATOR).wait_for(state="attached", timeout=10000)
     except Exception as e:
         log(f"⚠️ Dashboard refresh failed: {e}")
 
 
 def bot_loop(page):
     last_state = None
+    cases_without_popup = 0
+    POPUP_FAILURE_THRESHOLD = 3
     log("👀 Bot running...")
 
     try:
         while not SHUTDOWN_REQUESTED:
             check_hard_timeout()
 
+            _refresh_dashboard(page)
+
             if page.locator('input[name="identifier"]').count() > 0:
                 log("⚠️ Detected login page. Session expired, exiting bot.")
+                dump_page_html(page, "session_expired")
                 send_notification("❌ Session expired while running. Please start the bot again.")
                 return
-
-            _refresh_dashboard(page)
 
             case_count = get_case_count(page)
 
             if case_count > 0:
                 if last_state != "has_cases":
                     log(f"🔔 New case detected: {case_count}")
-                handle_new_case(page)
+                    dump_page_html(page, "new_case_detected")
+                result = handle_new_case(page)
+                if result == "accepted":
+                    cases_without_popup = 0
+                elif result == "failed":
+                    if not send_notification("🚨 Credentialed case seen but unable to accept, please manually accept the case."):
+                        log("❌ Telegram failed. Exiting bot.")
+                        sys.exit(1)
+                    cases_without_popup += 1
+                    if cases_without_popup >= POPUP_FAILURE_THRESHOLD:
+                        log(f"⚠️ {cases_without_popup} consecutive credentialed cases with no popup. Notification system may be dead.")
+                        dump_page_html(page, "notification_system_dead")
+                        if not send_notification(f"⚠️ {cases_without_popup} credentialed cases failed acceptance. Restarting bot to reconnect notifications."):
+                            log("❌ Telegram failed. Exiting bot.")
+                            sys.exit(1)
+                        return
+                # "not_credentialed" - don't count toward popup failure threshold
                 last_state = "has_cases"
             else:
                 if last_state != "no_cases":
@@ -405,6 +448,7 @@ def bot_loop(page):
             interruptible_sleep(2)
     except Exception as e:
         log(f"⚠️ Unhandled bot error: {e}")
+        dump_page_html(page, "unhandled_error")
 
 
 # ================= MAIN =================
@@ -429,6 +473,9 @@ def log_external_ip(playwright):
 with sync_playwright() as p:
     browser = None
     try:
+        clear_case_files()
+        log("🧹 Cleared stale case files from previous run.")
+
         log_external_ip(p)
 
         browser = p.chromium.launch(
