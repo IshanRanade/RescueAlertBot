@@ -302,8 +302,8 @@ def handle_new_case(page):
         try:
             page.locator(RESCUE_DASHBOARD_INDICATOR).wait_for(state="attached", timeout=5000)
         except Exception:
-            log("⚠️ Not on rescue dashboard, attempting navigation")
-            _refresh_dashboard(page)
+            log("⚠️ Not on rescue dashboard, attempting hard refresh")
+            _hard_refresh_dashboard(page)
 
         for attempt in range(20):
             if SHUTDOWN_REQUESTED:
@@ -387,7 +387,18 @@ RESCUE_DASHBOARD_INDICATOR = "app-rescue-dashboard"
 
 
 def _refresh_dashboard(page):
-    """Reload the page to force fresh data, then navigate to Rescue Dashboard."""
+    """Click rescue nav link to refresh dashboard view. Light refresh for each cycle."""
+    try:
+        rescue_link = page.locator(RESCUE_SELECTOR)
+        if rescue_link.count() > 0 and rescue_link.first.is_visible():
+            rescue_link.first.click()
+            time.sleep(2)
+    except Exception as e:
+        log(f"⚠️ Dashboard refresh failed: {e}")
+
+
+def _hard_refresh_dashboard(page):
+    """Full page reload to force SPA to re-fetch data. Used when data appears stale."""
     try:
         page.reload(wait_until="load", timeout=30000)
         rescue_link = page.locator(RESCUE_SELECTOR)
@@ -395,7 +406,7 @@ def _refresh_dashboard(page):
         rescue_link.first.click()
         page.locator(RESCUE_DASHBOARD_INDICATOR).wait_for(state="attached", timeout=10000)
     except Exception as e:
-        log(f"⚠️ Dashboard refresh failed: {e}")
+        log(f"⚠️ Hard refresh failed: {e}")
 
 
 def bot_loop(page):
@@ -419,6 +430,17 @@ def bot_loop(page):
             case_count = get_case_count(page)
 
             if case_count > 0:
+                # Check if table is stale (badge shows cases but table is empty)
+                has_rows = page.locator("div.complete-row").count() > 0
+                if not has_rows:
+                    log("🔄 Badge shows cases but table is empty, forcing hard refresh")
+                    _hard_refresh_dashboard(page)
+                    case_count = get_case_count(page)
+                    if case_count == 0:
+                        last_state = "no_cases"
+                        interruptible_sleep(2)
+                        continue
+
                 if last_state != "has_cases":
                     log(f"🔔 New case detected: {case_count}")
                     dump_page_html(page, "new_case_detected")
