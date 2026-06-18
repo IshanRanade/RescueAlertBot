@@ -359,7 +359,6 @@ def handle_new_case(page):
             return "failed"
         else:
             log("💤 No Accept button (not credentialed for this case)")
-            dump_page_html(page, "no_accept_button")
             return "not_credentialed"
     except Exception as e:
         log(f"⚠️ Error in handle_new_case: {e}")
