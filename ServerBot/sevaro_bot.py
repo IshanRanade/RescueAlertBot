@@ -402,7 +402,7 @@ def _hard_refresh_dashboard(page):
     try:
         page.reload(wait_until="load", timeout=30000)
         rescue_link = page.locator(RESCUE_SELECTOR)
-        rescue_link.first.wait_for(state="visible", timeout=15000)
+        rescue_link.first.wait_for(state="visible", timeout=60000)
         rescue_link.first.click()
         page.locator(RESCUE_DASHBOARD_INDICATOR).wait_for(state="attached", timeout=10000)
     except Exception as e:
