@@ -302,8 +302,11 @@ def handle_new_case(page):
         try:
             page.locator(RESCUE_DASHBOARD_INDICATOR).wait_for(state="attached", timeout=5000)
         except Exception:
-            log("⚠️ Not on rescue dashboard, attempting hard refresh")
-            _hard_refresh_dashboard(page)
+            log("⚠️ Not on rescue dashboard, dashboard is broken")
+            dump_page_html(page, "dashboard_broken")
+            if not send_notification("❌ Dashboard is broken, please restart the bot. A case was detected that you may be credentialed for, please check the dashboard manually."):
+                log("❌ Telegram failed. Exiting bot.")
+            sys.exit(1)
 
         for attempt in range(20):
             if SHUTDOWN_REQUESTED:
@@ -397,18 +400,6 @@ def _refresh_dashboard(page):
         log(f"⚠️ Dashboard refresh failed: {e}")
 
 
-def _hard_refresh_dashboard(page):
-    """Full page reload to force SPA to re-fetch data. Used when data appears stale."""
-    try:
-        page.reload(wait_until="load", timeout=30000)
-        rescue_link = page.locator(RESCUE_SELECTOR)
-        rescue_link.first.wait_for(state="visible", timeout=60000)
-        rescue_link.first.click()
-        page.locator(RESCUE_DASHBOARD_INDICATOR).wait_for(state="attached", timeout=10000)
-    except Exception as e:
-        log(f"⚠️ Hard refresh failed: {e}")
-
-
 def bot_loop(page):
     last_state = None
     cases_without_popup = 0
@@ -433,13 +424,12 @@ def bot_loop(page):
                 # Check if table is stale (badge shows cases but table is empty)
                 has_rows = page.locator("div.complete-row").count() > 0
                 if not has_rows:
-                    log("🔄 Badge shows cases but table is empty, forcing hard refresh")
-                    _hard_refresh_dashboard(page)
-                    case_count = get_case_count(page)
-                    if case_count == 0:
-                        last_state = "no_cases"
-                        interruptible_sleep(2)
-                        continue
+                    log("⚠️ Badge shows cases but table is empty — dashboard is broken")
+                    dump_page_html(page, "dashboard_broken")
+                    if not send_notification("❌ Dashboard is broken, the bot has shut down. A case was detected that you may be credentialed for, please check the dashboard manually."):
+                        log("❌ Telegram failed. Exiting bot.")
+                        sys.exit(1)
+                    return
 
                 if last_state != "has_cases":
                     log(f"🔔 New case detected: {case_count}")
