@@ -7,15 +7,17 @@ import sys
 import json
 from datetime import datetime, timezone, timedelta
 
+from zoneinfo import ZoneInfo
+
 sys.stdout.reconfigure(line_buffering=True)
 
 
-PST = timezone(timedelta(hours=-8), name="PST")
+LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
 
 def log(msg):
     """Print with timestamp."""
-    timestamp = datetime.now(PST).strftime("%Y/%m/%d %H:%M:%S %Z")
+    timestamp = datetime.now(LOCAL_TZ).strftime("%Y/%m/%d %H:%M:%S %Z")
     print(f"[{timestamp}] {msg}", flush=True)
 
 # Global flag for graceful shutdown
@@ -277,7 +279,7 @@ def wait_for_acknowledge(hospital, patient, patient_id):
 def dump_page_html(page, label="debug"):
     """Dump page HTML to a file for debugging."""
     try:
-        ts = datetime.now(PST).strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
         path = f"data/{ts}_{label}.html"
         html = page.content()
         with open(path, "w", encoding="utf-8") as f:
