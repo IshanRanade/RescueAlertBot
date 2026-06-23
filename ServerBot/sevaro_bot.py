@@ -136,7 +136,7 @@ def launch_synapse_tab(context, page):
 
 
 SYNAPSE_RENDER_TIMEOUT_MS = 15000
-SYNAPSE_MAX_RETRIES = 5
+SYNAPSE_MAX_RETRIES = 1
 
 
 def _synapse_app_is_healthy(synapse_page):
