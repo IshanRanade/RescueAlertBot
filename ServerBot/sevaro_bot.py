@@ -392,8 +392,13 @@ RESCUE_DASHBOARD_INDICATOR = "app-rescue-dashboard"
 
 
 def _refresh_dashboard(page):
-    """Click rescue nav link to refresh dashboard view. Light refresh for each cycle."""
+    """Navigate away from rescue dashboard and back to force Angular to rebuild the component.
+    This ensures the table always shows fresh data from the API."""
     try:
+        away_link = page.locator("li.waitingRoom")
+        if away_link.count() > 0 and away_link.first.is_visible():
+            away_link.first.click()
+            time.sleep(2)
         rescue_link = page.locator(RESCUE_SELECTOR)
         if rescue_link.count() > 0 and rescue_link.first.is_visible():
             rescue_link.first.click()
@@ -426,12 +431,17 @@ def bot_loop(page):
                 # Check if table is stale (badge shows cases but table is empty)
                 has_rows = page.locator("div.complete-row").count() > 0
                 if not has_rows:
-                    log("⚠️ Badge shows cases but table is empty — dashboard is broken")
-                    dump_page_html(page, "dashboard_broken")
-                    if not send_notification("❌ Dashboard is broken, the bot has shut down. A case was detected that you may be credentialed for, please check the dashboard manually."):
-                        log("❌ Telegram failed. Exiting bot.")
-                        sys.exit(1)
-                    return
+                    log("⚠️ Badge shows cases but table is empty — retrying refresh")
+                    _refresh_dashboard(page)
+                    time.sleep(3)
+                    has_rows = page.locator("div.complete-row").count() > 0
+                    if not has_rows:
+                        log("⚠️ Still no rows after retry — dashboard is broken")
+                        dump_page_html(page, "dashboard_broken")
+                        if not send_notification("❌ Dashboard is broken, the bot has shut down. A case was detected that you may be credentialed for, please check the dashboard manually."):
+                            log("❌ Telegram failed. Exiting bot.")
+                            sys.exit(1)
+                        return
 
                 if last_state != "has_cases":
                     log(f"🔔 New case detected: {case_count}")
