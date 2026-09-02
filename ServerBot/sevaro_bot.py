@@ -276,6 +276,30 @@ def wait_for_acknowledge(hospital, patient, patient_id):
     clear_case_files()
 
 
+MAX_HTML_DUMPS = int(os.environ.get("MAX_HTML_DUMPS", 200))
+
+
+def _prune_html_dumps():
+    """Keep only the newest MAX_HTML_DUMPS HTML files in data/ so the disk
+    doesn't fill up over time (an ENOSPC will crash Chromium)."""
+    try:
+        dumps = [
+            os.path.join("data", f)
+            for f in os.listdir("data")
+            if f.endswith(".html")
+        ]
+        if len(dumps) <= MAX_HTML_DUMPS:
+            return
+        dumps.sort(key=os.path.getmtime)
+        for old in dumps[:-MAX_HTML_DUMPS]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+    except Exception as e:
+        log(f"⚠️ Could not prune HTML dumps: {e}")
+
+
 def dump_page_html(page, label="debug"):
     """Dump page HTML to a file for debugging."""
     try:
@@ -285,6 +309,7 @@ def dump_page_html(page, label="debug"):
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
         log(f"📄 Page HTML dumped to {path}")
+        _prune_html_dumps()
     except Exception as e:
         log(f"⚠️ Could not dump page HTML: {e}")
 
