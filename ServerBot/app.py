@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, jsonify
 import subprocess
 import signal
+import socket
 import requests
 import os
 import sys
@@ -9,6 +10,33 @@ import json
 import logging
 from datetime import datetime, timezone, timedelta
 from threading import Thread, Event, Lock
+
+import urllib3.util.connection
+
+from blocklist import (
+    add_blocked_hospital,
+    ensure_blocklist_file,
+    load_blocked_hospitals,
+    remove_blocked_hospital,
+)
+
+# Create the blocklist file up front (if missing) so it's always present on the
+# host mount for backups/inspection, before the bot subprocess starts. Missing
+# file is harmless anyway — reads fail open — so this never blocks startup.
+ensure_blocklist_file()
+
+
+# Force IPv4 for all `requests`/urllib3 traffic (e.g. Telegram). This process
+# shares the WireGuard container's network namespace (network_mode:
+# service:wireguard), and that tunnel routes IPv4 only (AllowedIPs 0.0.0.0/0,
+# no ::/0). An IPv6 connection attempt has no route and hangs/fails, which for
+# send_telegram_or_die would needlessly kill the bot. Pin urllib3's resolver to
+# IPv4 so no AAAA address is ever tried. sevaro_bot.py does the same.
+def _allowed_gai_family_ipv4_only():
+    return socket.AF_INET
+
+
+urllib3.util.connection.allowed_gai_family = _allowed_gai_family_ipv4_only
 
 
 PST = timezone(timedelta(hours=-8), name="PST")
@@ -107,6 +135,7 @@ def get_status_data():
         "minutes": m,
         "seconds": s,
         "needs_acknowledge": needs_acknowledge,
+        "blocked_hospitals": load_blocked_hospitals(),
     }
 
 
@@ -252,7 +281,9 @@ def start():
     env = os.environ.copy()
     env["EMAIL"] = request.form["email"]
     env["PASSWORD"] = request.form["password"]
-    env["OTP"] = request.form["otp"]
+    env["MS_EMAIL"] = request.form["ms_email"]
+    env["MS_PASSWORD"] = request.form["ms_password"]
+    env["OTP"] = request.form.get("otp", "")
     env["TELEGRAM_BOT_TOKEN"] = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     env["TELEGRAM_CHAT_ID"] = os.environ.get("TELEGRAM_CHAT_ID", "")
     env["TIMER_DURATION"] = str(TIMER_DURATION)
@@ -300,6 +331,28 @@ def acknowledge():
             f.write("ack")
         log("👤 User acknowledged accepted case.")
     return redirect("/")
+
+
+@app.route("/add_hospital", methods=["POST"])
+def add_hospital():
+    """Add a hospital name to the blocklist. Cases from a blocked hospital are
+    never accepted. The list persists in blocked_hospitals.json (bind-mount it
+    for it to survive container recreation — see README)."""
+    name = request.form.get("hospital", "").strip()
+    if name:
+        add_blocked_hospital(name)
+        log(f"➕ Added blocked hospital: {name}")
+    return jsonify({"blocked_hospitals": load_blocked_hospitals()})
+
+
+@app.route("/remove_hospital", methods=["POST"])
+def remove_hospital():
+    """Remove a hospital name from the blocklist."""
+    name = request.form.get("hospital", "").strip()
+    if name:
+        remove_blocked_hospital(name)
+        log(f"➖ Removed blocked hospital: {name}")
+    return jsonify({"blocked_hospitals": load_blocked_hospitals()})
 
 
 @app.route("/status")
