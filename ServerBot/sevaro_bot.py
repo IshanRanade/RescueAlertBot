@@ -1,6 +1,7 @@
 from playwright.sync_api import sync_playwright
 import requests
 import signal
+import socket
 import time
 import os
 import sys
@@ -9,7 +10,20 @@ from datetime import datetime, timezone, timedelta
 
 from zoneinfo import ZoneInfo
 
+import urllib3.util.connection
+
 sys.stdout.reconfigure(line_buffering=True)
+
+
+# Force IPv4 for all `requests`/urllib3 traffic (e.g. Telegram). Chromium is
+# pinned to IPv4 separately via the --disable-ipv6 launch flag. All bot traffic
+# exits through the WireGuard VPN, whose IPv6 path is unreliable, so we make
+# urllib3's resolver hand back only IPv4 addresses.
+def _allowed_gai_family_ipv4_only():
+    return socket.AF_INET
+
+
+urllib3.util.connection.allowed_gai_family = _allowed_gai_family_ipv4_only
 
 
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
@@ -71,27 +85,41 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
+TELEGRAM_MAX_ATTEMPTS = int(os.environ.get("TELEGRAM_MAX_ATTEMPTS", 5))
+
+
 def send_notification(msg):
-    """Send Telegram notification. Returns True on success, False on failure."""
+    """Send Telegram notification, retrying transient failures with backoff.
+
+    All bot traffic exits through the WireGuard VPN, where Telegram is reachable
+    but ~3x slower and occasionally spikes past a tight timeout. A single blip
+    should not kill the bot, so retry a few times before giving up.
+    Returns True on success, False after all attempts fail."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log("Telegram disabled (missing token/chat id)")
         return False
 
     log(f"📤 Sending Telegram: {msg}")
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
-            timeout=10,
-        )
-        if r.ok:
-            log(f"📱 Telegram sent:\n{msg}")
-            return True
-        log(f"Telegram failed ({r.status_code}): {r.text}")
-        return False
-    except Exception as e:
-        log(f"Telegram error: {e}")
-        return False
+    for attempt in range(1, TELEGRAM_MAX_ATTEMPTS + 1):
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                data={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
+                timeout=20,
+            )
+            if r.ok:
+                log(f"📱 Telegram sent:\n{msg}")
+                return True
+            log(f"Telegram failed ({r.status_code}, attempt {attempt}/{TELEGRAM_MAX_ATTEMPTS}): {r.text}")
+        except Exception as e:
+            log(f"Telegram error (attempt {attempt}/{TELEGRAM_MAX_ATTEMPTS}): {e}")
+
+        if attempt < TELEGRAM_MAX_ATTEMPTS:
+            backoff = min(2 ** attempt, 30)  # 2s, 4s, 8s, 16s, capped at 30s
+            interruptible_sleep(backoff)
+
+    log(f"❌ Telegram failed after {TELEGRAM_MAX_ATTEMPTS} attempts")
+    return False
 
 
 def login(page):

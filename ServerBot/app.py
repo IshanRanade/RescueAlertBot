@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, jsonify
 import subprocess
 import signal
+import socket
 import requests
 import os
 import sys
@@ -9,6 +10,21 @@ import json
 import logging
 from datetime import datetime, timezone, timedelta
 from threading import Thread, Event, Lock
+
+import urllib3.util.connection
+
+
+# Force IPv4 for all `requests`/urllib3 traffic (e.g. Telegram). This process
+# shares the WireGuard container's network namespace (network_mode:
+# service:wireguard), and that tunnel routes IPv4 only (AllowedIPs 0.0.0.0/0,
+# no ::/0). An IPv6 connection attempt has no route and hangs/fails, which for
+# send_telegram_or_die would needlessly kill the bot. Pin urllib3's resolver to
+# IPv4 so no AAAA address is ever tried. sevaro_bot.py does the same.
+def _allowed_gai_family_ipv4_only():
+    return socket.AF_INET
+
+
+urllib3.util.connection.allowed_gai_family = _allowed_gai_family_ipv4_only
 
 
 PST = timezone(timedelta(hours=-8), name="PST")
