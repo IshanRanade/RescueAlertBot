@@ -1,0 +1,14 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Runtime debug HTML dumps (may contain patient info) — keep the dir, ignore contents
+ServerBot/data/*
+!ServerBot/data/.gitkeep
+
+# Runtime state files written by the bot
+ServerBot/case_accepted.json
+ServerBot/case_acknowledged
+
+# Captured Okta session — contains live auth tokens/cookies. Never commit.
+ServerBot/okta_state.json

@@ -26,6 +26,35 @@
             0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.5); }
             50% { box-shadow: 0 0 12px 4px rgba(231, 76, 60, 0.5); }
         }
+        .blocklist-section {
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid #ddd;
+            max-width: 480px;
+        }
+        #hospitalList { list-style: none; padding: 0; margin: 12px 0 0; }
+        #hospitalList li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 10px;
+            margin-bottom: 6px;
+            background: #f4f4f4;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        #hospitalList li span { word-break: break-word; margin-right: 10px; }
+        #hospitalList .remove-btn {
+            margin: 0;
+            padding: 4px 10px;
+            background: #e74c3c;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #hospitalList .empty { justify-content: center; color: #888; font-style: italic; }
+        #addHospitalForm input { padding: 8px; width: 260px; max-width: 60%; }
     </style>
 </head>
 <body>
@@ -62,6 +91,16 @@
 <p>Bot status: <span id="status">{{ status }}</span></p>
 <p class="timer">Time left: <span id="timer">{{ hours }}:{{ minutes }}:{{ seconds }}</span></p>
 
+<div class="blocklist-section">
+    <h3>Blocked Hospitals</h3>
+    <p>Cases from any hospital on this list will be ignored and never accepted.</p>
+    <form id="addHospitalForm" onsubmit="return addHospital(event)">
+        <input type="text" id="hospitalInput" placeholder="Hospital name" required>
+        <button type="submit">Add</button>
+    </form>
+    <ul id="hospitalList"></ul>
+</div>
+
 <script>
 function updateStatus() {
     fetch("/status")
@@ -81,7 +120,69 @@ function updateStatus() {
                 ackBtn.disabled = true;
                 ackBtn.classList.remove("active");
             }
+
+            renderHospitals(data.blocked_hospitals || []);
         });
+}
+
+function renderHospitals(hospitals) {
+    var list = document.getElementById("hospitalList");
+    // Skip re-rendering while a remove request is in flight so the DOM
+    // doesn't flicker under the user.
+    if (list.dataset.pending === "1") return;
+
+    var current = JSON.stringify(hospitals);
+    if (list.dataset.rendered === current) return;  // no change, leave DOM alone
+    list.dataset.rendered = current;
+
+    list.innerHTML = "";
+    if (hospitals.length === 0) {
+        var empty = document.createElement("li");
+        empty.className = "empty";
+        empty.textContent = "No hospitals blocked";
+        list.appendChild(empty);
+        return;
+    }
+    hospitals.forEach(function (name) {
+        var li = document.createElement("li");
+        var label = document.createElement("span");
+        label.textContent = name;
+        var btn = document.createElement("button");
+        btn.className = "remove-btn";
+        btn.textContent = "Remove";
+        btn.onclick = function () { removeHospital(name); };
+        li.appendChild(label);
+        li.appendChild(btn);
+        list.appendChild(li);
+    });
+}
+
+function postForm(url, name) {
+    var body = new URLSearchParams();
+    body.append("hospital", name);
+    return fetch(url, { method: "POST", body: body })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+            document.getElementById("hospitalList").dataset.rendered = "";
+            renderHospitals(data.blocked_hospitals || []);
+        });
+}
+
+function addHospital(event) {
+    event.preventDefault();
+    var input = document.getElementById("hospitalInput");
+    var name = input.value.trim();
+    if (!name) return false;
+    postForm("/add_hospital", name).then(function () { input.value = ""; });
+    return false;
+}
+
+function removeHospital(name) {
+    var list = document.getElementById("hospitalList");
+    list.dataset.pending = "1";
+    postForm("/remove_hospital", name).finally(function () {
+        list.dataset.pending = "0";
+    });
 }
 
 setInterval(updateStatus, 1000);

@@ -1,0 +1,19 @@
+# Keep secrets and local artifacts out of the image (COPY . . copies from disk).
+
+# Captured Okta session — live auth tokens/cookies. Must never enter an image.
+okta_state.json
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Runtime debug HTML dumps (may contain patient info); keep the dir itself
+data/*.html
+
+# Runtime state files written by the bot
+case_accepted.json
+case_acknowledged
+
+# VCS / tooling
+.git
+.gitignore

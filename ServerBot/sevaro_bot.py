@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 import urllib3.util.connection
 
+from blocklist import is_hospital_blocked
+
 sys.stdout.reconfigure(line_buffering=True)
 
 
@@ -342,11 +344,34 @@ def dump_page_html(page, label="debug"):
         log(f"⚠️ Could not dump page HTML: {e}")
 
 
+# Remembers the last case we ignored so we log it once, not every poll.
+LAST_IGNORED_KEY = None
+
+
+def case_is_blocked(hospital, patient, patient_id):
+    """Return True if this case's hospital is on the user's blocklist. When it
+    is, the bot must NOT accept the case. Logs once per distinct blocked case to
+    avoid spamming the log while the case lingers on the dashboard."""
+    global LAST_IGNORED_KEY
+    blocked, matched = is_hospital_blocked(hospital)
+    if not blocked:
+        return False
+    key = f"{hospital}|{patient_id}"
+    if key != LAST_IGNORED_KEY:
+        LAST_IGNORED_KEY = key
+        log(
+            f"🚫 Ignoring case from blocked hospital '{hospital}' "
+            f"(matched '{matched}'). Patient: {patient}, ID: {patient_id}"
+        )
+    return True
+
+
 def handle_new_case(page):
     """Look for an Accept button on the page and click it.
     Uses the same proven poll-and-click approach from v1.2/v1.3: find the button,
     extract case info, click, and trust the click succeeded.
     Returns: "accepted" if case was accepted,
+             "ignored" if the case's hospital is on the user's blocklist,
              "not_credentialed" if no Accept button found (user not credentialed),
              "failed" if credentialed but could not complete acceptance."""
     try:
@@ -363,9 +388,24 @@ def handle_new_case(page):
                 log("❌ Telegram failed. Exiting bot.")
             sys.exit(1)
 
+        # Scope the dashboard Accept button to the case row. The notification popup
+        # also contains a "Accept" button, so a page-wide button:has-text("Accept")
+        # would match the popup too — and if a blocked popup is persisting, its
+        # Accept button could be clicked here and accept the blocked case. Matching
+        # only inside div.complete-row keeps the dashboard branch popup-proof and
+        # mirrors the row selector used by extract_case_info.
+        dashboard_accept_selector = 'div.complete-row button:has-text("Accept")'
+
         for attempt in range(20):
             if SHUTDOWN_REQUESTED:
                 return "not_credentialed"
+
+            # A blocked case shown in the notification popup must NOT short-circuit
+            # this call: the popup overlays the dashboard, and a *different*,
+            # non-blocked case may be sitting in the dashboard row behind it. So a
+            # blocked popup falls through to the dashboard check below instead of
+            # returning "ignored" immediately (which would shadow that case).
+            popup_case_blocked = False
 
             # Check notification popup first (overlays dashboard with higher z-index)
             popup = page.locator(NOTIFICATION_POPUP_SELECTOR)
@@ -382,15 +422,22 @@ def handle_new_case(page):
                         time.sleep(1)
                         continue
 
-                    popup_accept.first.click(force=True)
-                    log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
-                    dump_page_html(page, "accepted_popup")
-                    write_case_accepted(hospital, patient, patient_id)
-                    wait_for_acknowledge(hospital, patient, patient_id)
-                    return "accepted"
+                    if case_is_blocked(hospital, patient, patient_id):
+                        # Don't return yet — fall through to the dashboard check so a
+                        # simultaneous non-blocked case can still be accepted. The
+                        # popup exposes only Accept/Reject (no safe dismiss control),
+                        # so we leave it alone rather than clicking Reject.
+                        popup_case_blocked = True
+                    else:
+                        popup_accept.first.click(force=True)
+                        log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
+                        dump_page_html(page, "accepted_popup")
+                        write_case_accepted(hospital, patient, patient_id)
+                        wait_for_acknowledge(hospital, patient, patient_id)
+                        return "accepted"
 
-            # Fall back to dashboard row Accept button
-            btn = page.locator(accept_selector)
+            # Fall back to dashboard row Accept button (scoped to exclude the popup)
+            btn = page.locator(dashboard_accept_selector)
             if btn.count() > 0:
                 saw_accept_button = True
                 time.sleep(1)
@@ -402,12 +449,22 @@ def handle_new_case(page):
                     time.sleep(1)
                     continue
 
+                if case_is_blocked(hospital, patient, patient_id):
+                    # Dashboard case is also blocked; nothing acceptable to act on.
+                    return "ignored"
+
                 btn.first.click(force=True)
                 log(f"✅ Accepted case!\n   Hospital: {hospital}\n   Patient: {patient}\n   Patient ID: {patient_id}")
                 dump_page_html(page, "accepted_dashboard")
                 write_case_accepted(hospital, patient, patient_id)
                 wait_for_acknowledge(hospital, patient, patient_id)
                 return "accepted"
+
+            # A blocked popup with no non-blocked dashboard case behind it: the case
+            # is accounted for, so report "ignored" and keep watching. bot_loop calls
+            # us again shortly, so a case that appears later is still caught.
+            if popup_case_blocked:
+                return "ignored"
 
             time.sleep(1)
 
@@ -502,6 +559,10 @@ def bot_loop(page):
                 result = handle_new_case(page)
                 if result == "accepted":
                     cases_without_popup = 0
+                elif result == "ignored":
+                    # Hospital is on the blocklist: leave the case alone and
+                    # keep watching. Not a popup failure — we saw the case fine.
+                    pass
                 elif result == "failed":
                     if not send_notification("🚨 Credentialed case seen but unable to accept, please manually accept the case."):
                         log("❌ Telegram failed. Exiting bot.")

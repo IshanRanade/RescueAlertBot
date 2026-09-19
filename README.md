@@ -2,7 +2,7 @@
 
 1. The user inputs their info and hits Start, then the bot will start.
 2. Once the bot detects and hits Accept, it will send a Telegram text
-3. It will continue watching the page for Accept and hit Accept everytime it sees it
+3. It will continue watching the page for Accept and hit Accept everytime it sees it, except for hospital names in the blocklist
 4. The bot will continue doing this indefinitely until the timer runs out, at which point the bot will be killed and stop
 5. If the user hits Start again while the bot is running, nothing should happen and the bot should keep running
 6. If the user hits Start while the bot is dead, it should start again
@@ -23,9 +23,47 @@
 21. If the failsafe goes off, it will kill the bot but the website is still accessible and the user can start the bot again in the future
 22. If the bot fails to accept a case that the user is credentialed for, it will notify the user and then continue looking for future accepts
 
+## Blocked hospitals list
+
+The UI has a "Blocked Hospitals" section where you can add/remove hospital
+names. If the bot sees a case whose hospital matches any name on the list
+(case-insensitive substring match, so "Mercy" blocks every "Mercy ..."
+facility), it ignores that case and never accepts it — it just keeps watching
+for other cases.
+
+A missing or empty list never causes problems: reads fail open (treated as
+"nothing blocked"), and on startup the bot creates the file as `[]` if it
+doesn't exist yet, so it's always present for backups.
+
+The list is stored in a JSON file, and its path is set by the
+`BLOCKED_HOSPITALS_FILE` env var. On the server it points into the `data`
+directory the bot already bind-mounts (for its HTML dumps), so the list lives on
+the host and persists across container recreation (`docker compose rm -sf` +
+rebuild). The relevant part of the `sevaro-bot` service in `compose.yml`:
+
+```yaml
+    volumes:
+      - /home/ishan/Data/SevaroBot/data:/app/data
+    environment:
+      PORT: "3267"
+      BLOCKED_HOSPITALS_FILE: "/app/data/blocked_hospitals.json"
+      # ...existing TELEGRAM_* vars
+```
+
+Because `/app/data` is a directory mount, the file is created there
+automatically on startup — no need to pre-create it — and atomic writes work
+normally (temp file and target are on the same host filesystem). It's also
+included in the nightly backup, since that backs up all of
+`/home/ishan/Data/SevaroBot/`.
+
 ## To build the package and publish to docker hub:
 
-`docker buildx build   --platform linux/amd64,linux/arm64   -t kingish123/sevaro-runner:latest   --push .`
+- SSH onto the home server
+- Go to the folder `/home/ishan/Github/RescueAlertBot/ServerBot`
+
+`sudo docker login -u kingish123`
+
+`sudo docker buildx build   --platform linux/amd64   -t kingish123/sevaro-runner:latest   --push .`
 
 ## To pull, build, and run on server:
 
@@ -35,5 +73,5 @@
 
 `sudo docker compose up --build -d sevaro-bot`
 
-To do all at once:
+To pull, build, and run all at onced:
 `sudo docker compose rm -sf sevaro-bot && sudo docker pull kingish123/sevaro-runner:latest && sudo docker compose up --build -d sevaro-bot`
