@@ -217,6 +217,9 @@ MS_NUMBER_SELECTORS = ["#idRichContext_DisplaySign", ".displaySign", '[data-test
 MS_APPROVE_TITLE = "#idDiv_SAOTCAS_Title"  # "Approve sign in request"
 MS_APP_NOTIFICATION_OPTION = '[data-value="PhoneAppNotification"]'  # MFA method picker
 MS_KMSI = "#KmsiCheckboxField, #KmsiDescription"  # "Stay signed in?"
+# "Let's keep your account secure — We'll help you set up another way to verify
+# it's you." (MFA registration nudge after approving.) Skip it with "Not now".
+MS_SKIP_MFA_REGISTRATION = '#skipMfaRegistrationLink:visible, a:text-is("Not now"):visible'
 MS_ERRORS = {
     "#usernameError": "Microsoft rejected the email",
     "#passwordError": "Microsoft rejected the password",
@@ -296,7 +299,11 @@ def _login_steps(page):
                         raise LoginError(f"{reason}: {detail}" if detail else reason)
 
                 number = _read_authenticator_number(page)
-                if number:
+                if _visible(page, MS_SKIP_MFA_REGISTRATION):
+                    act("Microsoft 'add another verification method' (Not now)")
+                    page.locator(MS_SKIP_MFA_REGISTRATION).first.click()
+                    _wait_hidden(page, MS_SKIP_MFA_REGISTRATION)
+                elif number:
                     if number != sent_number:
                         log(f"🔢 Microsoft Authenticator number: {number}")
                         if not send_notification(
