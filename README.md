@@ -64,13 +64,15 @@ included in the nightly backup, since that backs up all of
 
 `cd /home/ishan/Github/RescueAlertBot/ServerBot`
 
-`git pull`
+`git fetch origin`
+
+`git reset --hard origin/main`
 
 `sudo docker buildx build --platform linux/amd64 -t kingish123/sevaro-runner:latest --push .`
 
 After logging in to docker, to git pull and publish to docker all at once:
 
-`cd /home/ishan/Github/RescueAlertBot/ServerBot && git pull && sudo docker buildx build --platform linux/amd64 -t kingish123/sevaro-runner:latest --push .`
+`cd /home/ishan/Github/RescueAlertBot/ServerBot && git fetch origin && git reset --hard origin/main && sudo docker buildx build --platform linux/amd64 -t kingish123/sevaro-runner:latest --push .`
 
 ## To pull, build, and run on server:
 
@@ -89,4 +91,4 @@ To pull, build, and run all at once:
 ## Do everything
 <b>AFTER LOGGING IN TO DOCKER</b>, to do everything including publishing to docker and rebuilding the container:
 
-`cd /home/ishan/Github/RescueAlertBot/ServerBot && git pull && sudo docker buildx build --platform linux/amd64 -t kingish123/sevaro-runner:latest --push . && sleep 5 && cd /home/ishan && sudo docker compose rm -sf sevaro-bot && sudo docker pull kingish123/sevaro-runner:latest && sudo docker compose up --build -d sevaro-bot`
+`cd /home/ishan/Github/RescueAlertBot/ServerBot && git fetch origin && git reset --hard origin/main && sudo docker buildx build --platform linux/amd64 -t kingish123/sevaro-runner:latest --push . && cd /home/ishan && sudo docker compose rm -sf sevaro-bot && sudo docker pull kingish123/sevaro-runner:latest && sudo docker compose up --build -d sevaro-bot`
