@@ -59,13 +59,22 @@ included in the nightly backup, since that backs up all of
 ## To build the package and publish to docker hub:
 
 - SSH onto the home server
-- Go to the folder `/home/ishan/Github/RescueAlertBot/ServerBot`
 
 `sudo docker login -u kingish123`
 
-`sudo docker buildx build   --platform linux/amd64   -t kingish123/sevaro-runner:latest   --push .`
+`cd /home/ishan/Github/RescueAlertBot/ServerBot`
+
+`git pull`
+
+`sudo docker buildx build --platform linux/amd64 -t kingish123/sevaro-runner:latest --push .`
+
+After logging in to docker, to git pull and publish to docker all at once:
+
+`cd /home/ishan/Github/RescueAlertBot/ServerBot && git pull && sudo docker buildx build --platform linux/amd64 -t kingish123/sevaro-runner:latest --push .`
 
 ## To pull, build, and run on server:
+
+`cd /home/ishan`
 
 `sudo docker compose rm -sf sevaro-bot`
 
@@ -73,5 +82,11 @@ included in the nightly backup, since that backs up all of
 
 `sudo docker compose up --build -d sevaro-bot`
 
-To pull, build, and run all at onced:
-`sudo docker compose rm -sf sevaro-bot && sudo docker pull kingish123/sevaro-runner:latest && sudo docker compose up --build -d sevaro-bot`
+To pull, build, and run all at once:
+
+`cd /home/ishan && sudo docker compose rm -sf sevaro-bot && sudo docker pull kingish123/sevaro-runner:latest && sudo docker compose up --build -d sevaro-bot`
+
+## Do everything
+<b>AFTER LOGGING IN TO DOCKER</b>, to do everything including publishing to docker and rebuilding the container:
+
+`cd /home/ishan/Github/RescueAlertBot/ServerBot && git pull && sudo docker buildx build --platform linux/amd64 -t kingish123/sevaro-runner:latest --push . && sleep 5 && cd /home/ishan && sudo docker compose rm -sf sevaro-bot && sudo docker pull kingish123/sevaro-runner:latest && sudo docker compose up --build -d sevaro-bot`
